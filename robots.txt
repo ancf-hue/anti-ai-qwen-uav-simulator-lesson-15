@@ -1,0 +1,42 @@
+# robots.txt для Anti-AI Qwen UAV Simulator - Урок 15: Наставник
+# https://anti-ai-qwen-uav-simulator-lesson-1-virid.vercel.app/
+# Обновлено: 2026-06-21
+
+# Разрешаем всем поисковым системам индексировать сайт
+User-agent: *
+Allow: /
+
+# Указываем путь к карте сайта
+Sitemap: https://anti-ai-qwen-uav-simulator-lesson-1-virid.vercel.app/sitemap.xml
+
+# Закрываем технические файлы и папки
+Disallow: /node_modules/
+Disallow: /.git/
+Disallow: /.github/
+Disallow: /.vscode/
+Disallow: /package.json
+Disallow: /package-lock.json
+Disallow: /README.md
+Disallow: /LICENSE
+Disallow: /.gitignore
+Disallow: /.env
+Disallow: /vercel.json
+
+# Указываем основной домен
+Host: anti-ai-qwen-uav-simulator-lesson-1-virid.vercel.app
+
+# Специальные правила для Google
+User-agent: Googlebot
+Allow: /
+Crawl-delay: 0
+
+# Специальные правила для Yandex
+User-agent: Yandex
+Allow: /
+Crawl-delay: 1
+Clean-param: utm_source&utm_medium&utm_campaign
+
+# Специальные правила для Bing
+User-agent: Bingbot
+Allow: /
+Crawl-delay: 1
