@@ -408,9 +408,9 @@ body{ overflow: hidden; font-family:'Segoe UI','Orbitron', monospace; background
   </div>
   
   <div class="difficulty-selector">
-    <button class="difficulty-btn easy" onclick="startSimulator('easy')"><span>🟢 Лёгкий</span></button>
-    <button class="difficulty-btn medium" onclick="startSimulator('medium')"><span>🟡 Средний</span></button>
-    <button class="difficulty-btn hard" onclick="startSimulator('hard')"><span>🔴 Сложный</span></button>
+    <button class="difficulty-btn easy" id="easyBtn"><span>🟢 Лёгкий</span></button>
+    <button class="difficulty-btn medium" id="mediumBtn"><span>🟡 Средний</span></button>
+    <button class="difficulty-btn hard" id="hardBtn"><span>🔴 Сложный</span></button>
   </div>
   
   <div class="difficulty-info">
@@ -442,9 +442,9 @@ body{ overflow: hidden; font-family:'Segoe UI','Orbitron', monospace; background
 
   <div id="mentor-panel">
     <div class="title">🎓 Действия наставника:</div>
-    <button class="mentor-btn" id="hintBtn" onclick="giveHint()"><span>💡 Подсказка (8 сек)</span></button>
-    <button class="mentor-btn" id="takeoverBtn" onclick="takeoverControl()"><span>🎮 Перехват (5 сек)</span></button>
-    <button class="mentor-btn" id="encourageBtn" onclick="encourageStudent()"><span>👍 Подбодрить</span></button>
+    <button class="mentor-btn" id="hintBtn"><span>💡 Подсказка (8 сек)</span></button>
+    <button class="mentor-btn" id="takeoverBtn"><span>🎮 Перехват (5 сек)</span></button>
+    <button class="mentor-btn" id="encourageBtn"><span>👍 Подбодрить</span></button>
     <div style="margin-top: 10px; font-size: 10px; color: #888;">
       Подсказок: <span id="hints-used">0</span><br>
       Перехватов: <span id="takeovers-used">0</span>
@@ -516,1067 +516,1249 @@ body{ overflow: hidden; font-family:'Segoe UI','Orbitron', monospace; background
   <source src="mentor-theme.mp3" type="audio/mpeg">
 </audio>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<!-- Загрузка Three.js с fallback -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" 
+        onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js';">
+</script>
+
 <script>
-// ====== ИНИЦИАЛИЗАЦИЯ ПЕРЕМЕННЫХ ПЕРЕД ИСПОЛЬЗОВАНИЕМ ======
-const DIFFICULTY_CONFIG = {
-  easy: { studentSkill: 0.3, confidenceDecay: 0.3, taskCount: 3, MISSION_TIME: 180, name: 'Лёгкий' },
-  medium: { studentSkill: 0.15, confidenceDecay: 0.5, taskCount: 4, MISSION_TIME: 150, name: 'Средний' },
-  hard: { studentSkill: 0.05, confidenceDecay: 0.8, taskCount: 5, MISSION_TIME: 120, name: 'Сложный' }
-};
+// ============================================================
+// ОСНОВНОЙ СКРИПТ
+// ============================================================
 
-const SAVE_KEY = 'qwen_mentor_lesson15_progress';
-const SAVE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+(function() {
+    'use strict';
 
-const TARGET_FPS = 60;
-const FRAME_INTERVAL = 1000 / TARGET_FPS;
-
-let currentDifficulty = 'easy';
-
-// Объявление state ДО использования
-let state = {
-  animationId: null, gameCompleted: false, timeLeft: 180, timerInterval: null, isRestarting: false,
-  cameraAngle: 0, cameraPitch: -0.3, cameraDistance: 8,
-  studentConfidence: 100, studentAttention: 100, studentErrors: 0,
-  tasksCompleted: 0, hintsUsed: 0, takeoversUsed: 0, encouragements: 0, score: 0,
-  isControlling: false, controlTimeout: null, hintTimeout: null,
-  dronePos: new THREE.Vector3(0, 2, 0),
-  droneVel: new THREE.Vector3(0, 0, 0),
-  targetPos: new THREE.Vector3(5, 2, 5),
-  lastHintTime: 0, hintActive: false, hintLine: null, propAngle: 0,
-  lastFrameTime: 0, fpsFrames: 0, fpsLastUpdate: 0, currentFps: 60,
-  _warnedLowConf: false,
-  starsMesh: null, nebulaMesh: null,
-  // Добавляем недостающие поля
-  timeElapsed: 0,
-  studentPos: new THREE.Vector3(0, 2, 0),
-  isPaused: false,
-  taskCount: 3,
-  currentTask: 0
-};
-
-let scene, camera, renderer, studentDroneGroup, targetMarker, targetRing;
-let propellers = [];
-let audioCtx = null, notifTimeout = null, lastNotifText = "";
-let listenersAttached = false;
-
-// ====== ФУНКЦИИ ======
-
-function ensureAudio(){
-  if(!audioCtx){ try{ audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e){ return false; } }
-  if(audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
-  return true;
-}
-
-function playSound(freq, duration, type = 'square', volume = 0.08){
-  if(!ensureAudio()) return;
-  try{
-    const now = audioCtx.currentTime;
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.type = type; osc.frequency.value = freq;
-    gain.gain.setValueAtTime(volume, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
-    osc.connect(gain); gain.connect(audioCtx.destination);
-    osc.start(now); osc.stop(now + duration);
-    setTimeout(() => { try{ osc.disconnect(); } catch(e){} try{ gain.disconnect(); } catch(e){} }, (duration * 1000) + 50);
-  } catch(e){}
-}
-
-const SFX = {
-  success: () => { playSound(600, 0.1, 'sine', 0.15); setTimeout(() => playSound(900, 0.15, 'sine', 0.1), 50); setTimeout(() => playSound(1200, 0.2, 'sine', 0.08), 100); },
-  error: () => { playSound(200, 0.2, 'sawtooth', 0.15); },
-  hint: () => { playSound(800, 0.1, 'sine', 0.1); },
-  takeover: () => { playSound(1000, 0.15, 'square', 0.12); },
-  victory: () => { playSound(523, 0.15, 'sine', 0.12); setTimeout(() => playSound(659, 0.15, 'sine', 0.12), 150); setTimeout(() => playSound(784, 0.15, 'sine', 0.12), 300); setTimeout(() => playSound(1047, 0.3, 'sine', 0.15), 450); },
-  warning: () => { playSound(400, 0.15, 'square', 0.1); },
-  save: () => { playSound(500, 0.05, 'sine', 0.05); }
-};
-
-function showNotification(text, type = ''){
-  const n = document.getElementById('notification');
-  if(!n || lastNotifText === text) return;
-  lastNotifText = text;
-  n.innerText = text;
-  n.className = 'show ' + type;
-  if(notifTimeout) clearTimeout(notifTimeout);
-  notifTimeout = setTimeout(() => { n.className = ''; lastNotifText = ""; }, 2500);
-}
-
-function showSavedIndicator(){
-  const el = document.getElementById('save-indicator');
-  if(el){ 
-    el.style.opacity = 1; 
-    setTimeout(() => { el.style.opacity = 0; }, 1000); 
-  }
-}
-
-function saveProgress(){
-  if(state.gameCompleted) return;
-  try{
-    const data = {
-      difficulty: currentDifficulty,
-      tasksCompleted: state.tasksCompleted,
-      score: state.score,
-      timeLeft: state.timeLeft,
-      studentConfidence: state.studentConfidence,
-      studentAttention: state.studentAttention,
-      studentErrors: state.studentErrors,
-      hintsUsed: state.hintsUsed,
-      takeoversUsed: state.takeoversUsed,
-      encouragements: state.encouragements,
-      dronePos: { x: state.dronePos.x, y: state.dronePos.y, z: state.dronePos.z },
-      targetPos: { x: state.targetPos.x, y: state.targetPos.y, z: state.targetPos.z },
-      timestamp: Date.now()
+    // ====== КОНФИГУРАЦИЯ ======
+    const DIFFICULTY_CONFIG = {
+        easy: { studentSkill: 0.3, confidenceDecay: 0.3, taskCount: 3, MISSION_TIME: 180, name: 'Лёгкий' },
+        medium: { studentSkill: 0.15, confidenceDecay: 0.5, taskCount: 4, MISSION_TIME: 150, name: 'Средний' },
+        hard: { studentSkill: 0.05, confidenceDecay: 0.8, taskCount: 5, MISSION_TIME: 120, name: 'Сложный' }
     };
-    localStorage.setItem(SAVE_KEY, JSON.stringify(data));
-    SFX.save();
-    showSavedIndicator();
-  } catch(e){
-    console.log('Не удалось сохранить прогресс:', e.message);
-  }
-}
 
-function loadProgress(){
-  try{
-    const raw = localStorage.getItem(SAVE_KEY);
-    if(!raw) return null;
-    const data = JSON.parse(raw);
-    if(Date.now() - data.timestamp > SAVE_MAX_AGE_MS){
-      localStorage.removeItem(SAVE_KEY);
-      return null;
+    const SAVE_KEY = 'qwen_mentor_lesson15_progress';
+    const SAVE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+    const TARGET_FPS = 60;
+    const FRAME_INTERVAL = 1000 / TARGET_FPS;
+
+    let currentDifficulty = 'easy';
+    let audioCtx = null;
+    let notifTimeout = null;
+    let lastNotifText = "";
+    let listenersAttached = false;
+
+    // ====== СОСТОЯНИЕ ======
+    const state = {
+        animationId: null,
+        gameCompleted: false,
+        timeLeft: 180,
+        timerInterval: null,
+        isRestarting: false,
+        cameraAngle: 0,
+        cameraPitch: -0.3,
+        cameraDistance: 8,
+        studentConfidence: 100,
+        studentAttention: 100,
+        studentErrors: 0,
+        tasksCompleted: 0,
+        hintsUsed: 0,
+        takeoversUsed: 0,
+        encouragements: 0,
+        score: 0,
+        isControlling: false,
+        controlTimeout: null,
+        hintTimeout: null,
+        dronePos: new THREE.Vector3(0, 2, 0),
+        droneVel: new THREE.Vector3(0, 0, 0),
+        targetPos: new THREE.Vector3(5, 2, 5),
+        lastHintTime: 0,
+        hintActive: false,
+        hintLine: null,
+        propAngle: 0,
+        lastFrameTime: 0,
+        fpsFrames: 0,
+        fpsLastUpdate: 0,
+        currentFps: 60,
+        _warnedLowConf: false,
+        starsMesh: null,
+        nebulaMesh: null,
+        taskCount: 3
+    };
+
+    let scene, camera, renderer, studentDroneGroup, targetMarker, targetRing;
+    let propellers = [];
+    const keys = {};
+
+    // ====== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======
+
+    function ensureAudio() {
+        if (!audioCtx) {
+            try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } 
+            catch(e) { return false; }
+        }
+        if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+        return true;
     }
-    return data;
-  } catch(e){
-    console.log('Не удалось загрузить прогресс:', e.message);
-    return null;
-  }
-}
 
-function clearProgress(){
-  try{ localStorage.removeItem(SAVE_KEY); } catch(e){}
-}
-
-function showRestoreModal(data){
-  if(document.getElementById('simulator-page').classList.contains('active')) {
-    clearProgress();
-    return;
-  }
-  
-  const statsEl = document.getElementById('restoreStats');
-  const cfg = DIFFICULTY_CONFIG[data.difficulty];
-  statsEl.innerHTML = `
-    🎚️ Уровень: <strong>${cfg.name}</strong><br>
-    🎯 Заданий: <strong>${data.tasksCompleted}/${cfg.taskCount}</strong><br>
-    🎓 Оценка: <strong>${data.score}</strong><br>
-    ⏱️ Осталось: <strong>${data.timeLeft}с</strong>
-  `;
-  document.getElementById('restoreModal').classList.add('show');
-  
-  document.getElementById('restoreContinueBtn').onclick = () => {
-    document.getElementById('restoreModal').classList.remove('show');
-    resumeFromSave(data);
-  };
-  document.getElementById('restoreNewBtn').onclick = () => {
-    document.getElementById('restoreModal').classList.remove('show');
-    clearProgress();
-  };
-}
-
-function resumeFromSave(data){
-  currentDifficulty = data.difficulty;
-  const config = DIFFICULTY_CONFIG[currentDifficulty];
-  
-  state.timeLeft = data.timeLeft;
-  state.tasksCompleted = data.tasksCompleted;
-  state.score = data.score;
-  state.studentConfidence = data.studentConfidence;
-  state.studentAttention = data.studentAttention;
-  state.studentErrors = data.studentErrors;
-  state.hintsUsed = data.hintsUsed;
-  state.takeoversUsed = data.takeoversUsed;
-  state.encouragements = data.encouragements;
-  state.dronePos.set(data.dronePos.x, data.dronePos.y, data.dronePos.z);
-  state.targetPos.set(data.targetPos.x, data.targetPos.y, data.targetPos.z);
-  state.gameCompleted = false;
-  state._warnedLowConf = false;
-  
-  ensureAudio();
-  const music = document.getElementById('bg-music');
-  if(music.paused){
-    music.volume = 0.4;
-    music.play().catch(() => console.log('Фоновая музыка недоступна — игра продолжается без звука'));
-  }
-  
-  document.getElementById('intro-page').classList.add('hidden');
-  setTimeout(() => {
-    document.getElementById('simulator-page').classList.add('active');
-    document.getElementById('tasks-total').innerText = config.taskCount;
-    initSimulator();
-    startMissionTimer(true);
-    syncUIFromState();
-    showNotification("▶️ Обучение продолжено!", 'success');
-  }, 800);
-}
-
-function syncUIFromState(){
-  document.getElementById('tasks-completed').innerText = state.tasksCompleted;
-  document.getElementById('score-value').innerText = state.score;
-  document.getElementById('mission-timer').innerText = state.timeLeft;
-  document.getElementById('student-confidence').innerText = Math.round(state.studentConfidence);
-  document.getElementById('student-attention').innerText = Math.round(state.studentAttention);
-  document.getElementById('student-errors').innerText = state.studentErrors;
-  document.getElementById('hints-used').innerText = state.hintsUsed;
-  document.getElementById('takeovers-used').innerText = state.takeoversUsed;
-}
-
-// Функция startSimulator должна быть доступна глобально
-window.startSimulator = function(difficulty){
-  currentDifficulty = difficulty;
-  const config = DIFFICULTY_CONFIG[difficulty];
-  state.timeLeft = config.MISSION_TIME;
-  state.taskCount = config.taskCount;
-  state.tasksCompleted = 0;
-  state.score = 0;
-  state.studentConfidence = 100;
-  state.studentAttention = 100;
-  state.studentErrors = 0;
-  state.hintsUsed = 0;
-  state.takeoversUsed = 0;
-  state.encouragements = 0;
-  state.gameCompleted = false;
-  state._warnedLowConf = false;
-  state.hintActive = false;
-  state.isControlling = false;
-  
-  ensureAudio();
-  const music = document.getElementById('bg-music');
-  if(music.paused){
-    music.volume = 0.4;
-    music.play().catch(() => console.log('Фоновая музыка недоступна — игра продолжается без звука'));
-  }
-  
-  document.getElementById('intro-page').classList.add('hidden');
-  setTimeout(() => {
-    document.getElementById('simulator-page').classList.add('active');
-    document.getElementById('tasks-total').innerText = config.taskCount;
-    document.getElementById('tasks-completed').innerText = '0';
-    document.getElementById('score-value').innerText = '0';
-    initSimulator();
-    startMissionTimer(false);
-    startStudentAI();
-    syncUIFromState();
-    showNotification(`🎓 Уровень ${config.name} начат! Дайте подсказку ученику.`, 'success');
-  }, 800);
-}
-
-function exitToMenu(){
-  if(state.animationId){ cancelAnimationFrame(state.animationId); state.animationId = null; }
-  if(state.timerInterval){ clearInterval(state.timerInterval); state.timerInterval = null; }
-  if(state.controlTimeout){ clearTimeout(state.controlTimeout); state.controlTimeout = null; }
-  if(state.hintTimeout){ clearTimeout(state.hintTimeout); state.hintTimeout = null; }
-  document.getElementById('victoryModal').classList.remove('show');
-  document.getElementById('defeatModal').classList.remove('show');
-  document.getElementById('simulator-page').classList.remove('active');
-  setTimeout(() => { document.getElementById('intro-page').classList.remove('hidden'); }, 300);
-  const music = document.getElementById('bg-music');
-  music.pause(); music.currentTime = 0;
-  clearProgress();
-}
-
-function showVictoryModal(){
-  if(state.gameCompleted) return;
-  state.gameCompleted = true;
-  if(state.timerInterval){ clearInterval(state.timerInterval); state.timerInterval = null; }
-  document.getElementById('victoryTasks').innerText = state.tasksCompleted;
-  document.getElementById('victoryScore').innerText = state.score;
-  document.getElementById('victoryHints').innerText = state.hintsUsed;
-  document.getElementById('victoryTakeovers').innerText = state.takeoversUsed;
-  document.getElementById('victoryModal').classList.add('show');
-  SFX.victory();
-  clearProgress();
-}
-
-function showDefeatModal(){
-  if(state.gameCompleted) return;
-  state.gameCompleted = true;
-  if(state.timerInterval){ clearInterval(state.timerInterval); state.timerInterval = null; }
-  document.getElementById('defeatTasks').innerText = state.tasksCompleted;
-  document.getElementById('defeatErrors').innerText = state.studentErrors;
-  document.getElementById('defeatModal').classList.add('show');
-  clearProgress();
-}
-
-function startMissionTimer(keepTime = false){
-  if(state.timerInterval) clearInterval(state.timerInterval);
-  if(!keepTime){
-    state.timeLeft = DIFFICULTY_CONFIG[currentDifficulty].MISSION_TIME;
-  }
-  const timerElem = document.getElementById('mission-timer');
-  if(timerElem) timerElem.innerText = state.timeLeft;
-  
-  state.timerInterval = setInterval(() => {
-    if(state.gameCompleted) return;
-    state.timeLeft--;
-    if(timerElem) timerElem.innerText = state.timeLeft;
-    if(state.timeLeft === 60) showNotification("⏰ Осталась 1 минута!", '');
-    if(state.timeLeft === 30) showNotification("⏰ Осталось 30 секунд!", 'hit');
-    
-    if(state.timeLeft % 5 === 0) saveProgress();
-    
-    if(state.timeLeft <= 0){
-      clearInterval(state.timerInterval);
-      state.timerInterval = null;
-      if(state.tasksCompleted >= DIFFICULTY_CONFIG[currentDifficulty].taskCount) showVictoryModal();
-      else showDefeatModal();
+    function playSound(freq, duration, type = 'square', volume = 0.08) {
+        if (!ensureAudio()) return;
+        try {
+            const now = audioCtx.currentTime;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = type;
+            osc.frequency.value = freq;
+            gain.gain.setValueAtTime(volume, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start(now);
+            osc.stop(now + duration);
+            setTimeout(() => {
+                try { osc.disconnect(); } catch(e) {}
+                try { gain.disconnect(); } catch(e) {}
+            }, (duration * 1000) + 50);
+        } catch(e) {}
     }
-  }, 1000);
-}
 
-function startStudentAI(){
-  state.studentConfidence = 100; state.studentAttention = 100;
-  state.studentErrors = 0; state.tasksCompleted = 0; state.score = 0;
-  state.hintsUsed = 0; state.takeoversUsed = 0; state.encouragements = 0;
-  state.lastHintTime = Date.now(); state.hintActive = false;
-  state._warnedLowConf = false;
-  
-  document.getElementById('student-confidence').innerText = '100';
-  document.getElementById('student-attention').innerText = '100';
-  document.getElementById('student-errors').innerText = '0';
-  document.getElementById('tasks-completed').innerText = '0';
-  document.getElementById('score-value').innerText = '0';
-  document.getElementById('hints-used').innerText = '0';
-  document.getElementById('takeovers-used').innerText = '0';
-  
-  generateNewTask();
-  setTimeout(() => { showNotification("🎓 Ученик ждёт ваших указаний! Дайте подсказку!", 'info'); }, 2000);
-}
+    const SFX = {
+        success: () => { playSound(600, 0.1, 'sine', 0.15); setTimeout(() => playSound(900, 0.15, 'sine', 0.1), 50); setTimeout(() => playSound(1200, 0.2, 'sine', 0.08), 100); },
+        error: () => { playSound(200, 0.2, 'sawtooth', 0.15); },
+        hint: () => { playSound(800, 0.1, 'sine', 0.1); },
+        takeover: () => { playSound(1000, 0.15, 'square', 0.12); },
+        victory: () => { playSound(523, 0.15, 'sine', 0.12); setTimeout(() => playSound(659, 0.15, 'sine', 0.12), 150); setTimeout(() => playSound(784, 0.15, 'sine', 0.12), 300); setTimeout(() => playSound(1047, 0.3, 'sine', 0.15), 450); },
+        warning: () => { playSound(400, 0.15, 'square', 0.1); },
+        save: () => { playSound(500, 0.05, 'sine', 0.05); }
+    };
 
-function generateNewTask(){
-  state.targetPos.set((Math.random() - 0.5) * 12, 1.5 + Math.random() * 2, (Math.random() - 0.5) * 12);
-  if(targetMarker) targetMarker.position.copy(state.targetPos);
-  if(targetRing) targetRing.position.copy(state.targetPos);
-  state.lastHintTime = Date.now(); state.hintActive = false;
-  showNotification(`🎯 Задание ${state.tasksCompleted + 1}: долететь до оранжевой цели!`, '');
-  saveProgress();
-}
-
-function updateStudentAI(){
-  if(state.gameCompleted) return;
-  const config = DIFFICULTY_CONFIG[currentDifficulty];
-  const now = Date.now();
-  const toTarget = new THREE.Vector3().subVectors(state.targetPos, state.dronePos);
-  const distance = toTarget.length();
-  
-  if(distance < 1.5){
-    state.tasksCompleted++;
-    state.score += 20 + Math.floor(state.studentConfidence / 5);
-    document.getElementById('tasks-completed').innerText = state.tasksCompleted;
-    document.getElementById('score-value').innerText = state.score;
-    SFX.success();
-    showNotification(`✅ Задание выполнено! (${state.tasksCompleted}/${config.taskCount})`, 'success');
-    if(state.tasksCompleted >= config.taskCount){ showVictoryModal(); return; }
-    generateNewTask();
-    return;
-  }
-  
-  if(!state.hintActive && !state.isControlling){
-    state.droneVel.x += (Math.random() - 0.5) * 0.1;
-    state.droneVel.z += (Math.random() - 0.5) * 0.1;
-    state.droneVel.y += (Math.random() - 0.5) * 0.05;
-    const timeWithoutHint = (now - state.lastHintTime) / 1000;
-    if(timeWithoutHint > 10){
-      state.studentConfidence = Math.max(0, state.studentConfidence - config.confidenceDecay * 0.1);
-      state.studentAttention = Math.max(0, state.studentAttention - 0.05);
+    function showNotification(text, type = '') {
+        const n = document.getElementById('notification');
+        if (!n || lastNotifText === text) return;
+        lastNotifText = text;
+        n.innerText = text;
+        n.className = 'show ' + type;
+        if (notifTimeout) clearTimeout(notifTimeout);
+        notifTimeout = setTimeout(() => { n.className = ''; lastNotifText = ""; }, 2500);
     }
-    if(!state._warnedLowConf && state.studentConfidence < 30){
-      state._warnedLowConf = true;
-      SFX.warning();
-      showNotification("⚠️ Ученик теряет уверенность! Дайте подсказку!", 'hit');
+
+    function showSavedIndicator() {
+        const el = document.getElementById('save-indicator');
+        if (el) {
+            el.style.opacity = 1;
+            setTimeout(() => { el.style.opacity = 0; }, 1000);
+        }
     }
-    if(state.studentConfidence > 40) state._warnedLowConf = false;
-    
-    if(state.studentConfidence <= 0){
-      state.studentErrors++;
-      document.getElementById('student-errors').innerText = state.studentErrors;
-      showNotification("❌ Ученик запаниковал! Задание провалено.", 'hit');
-      generateNewTask();
+
+    function saveProgress() {
+        if (state.gameCompleted) return;
+        try {
+            const data = {
+                difficulty: currentDifficulty,
+                tasksCompleted: state.tasksCompleted,
+                score: state.score,
+                timeLeft: state.timeLeft,
+                studentConfidence: state.studentConfidence,
+                studentAttention: state.studentAttention,
+                studentErrors: state.studentErrors,
+                hintsUsed: state.hintsUsed,
+                takeoversUsed: state.takeoversUsed,
+                encouragements: state.encouragements,
+                dronePos: { x: state.dronePos.x, y: state.dronePos.y, z: state.dronePos.z },
+                targetPos: { x: state.targetPos.x, y: state.targetPos.y, z: state.targetPos.z },
+                timestamp: Date.now()
+            };
+            localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+            SFX.save();
+            showSavedIndicator();
+        } catch(e) {
+            console.log('Не удалось сохранить прогресс:', e.message);
+        }
     }
-  } else if(state.hintActive && !state.isControlling){
-    const direction = toTarget.clone().normalize();
-    const noise = (1 - config.studentSkill) * 0.5;
-    direction.x += (Math.random() - 0.5) * noise;
-    direction.z += (Math.random() - 0.5) * noise;
-    direction.y += (Math.random() - 0.5) * noise * 0.5;
-    direction.normalize();
-    const speed = 0.03 + config.studentSkill * 0.04;
-    state.droneVel.x += direction.x * speed;
-    state.droneVel.z += direction.z * speed;
-    state.droneVel.y += direction.y * speed * 0.5;
-    state.studentConfidence = Math.min(100, state.studentConfidence + 0.1);
-    state.studentAttention = Math.min(100, state.studentAttention + 0.05);
-  }
-  
-  state.droneVel.multiplyScalar(state.isControlling ? 0.92 : 0.95);
-  state.dronePos.add(state.droneVel);
-  state.dronePos.x = Math.max(-15, Math.min(15, state.dronePos.x));
-  state.dronePos.z = Math.max(-15, Math.min(15, state.dronePos.z));
-  state.dronePos.y = Math.max(0.5, Math.min(6, state.dronePos.y));
-  
-  document.getElementById('student-confidence').innerText = Math.round(state.studentConfidence);
-  document.getElementById('student-attention').innerText = Math.round(state.studentAttention);
-  
-  const statusEl = document.getElementById('student-status');
-  if(state.studentConfidence > 70 && state.studentAttention > 70){
-    statusEl.className = 'student-status good';
-    statusEl.innerText = '✅ Учится хорошо';
-  } else if(state.studentConfidence > 40 && state.studentAttention > 40){
-    statusEl.className = 'student-status warning';
-    statusEl.innerText = '⚠️ Нужна помощь';
-  } else {
-    statusEl.className = 'student-status danger';
-    statusEl.innerText = '❌ Критическое состояние';
-  }
-  
-  if(studentDroneGroup){
-    studentDroneGroup.position.copy(state.dronePos);
-    if(state.droneVel.length() > 0.01){
-      const angle = Math.atan2(state.droneVel.x, state.droneVel.z);
-      studentDroneGroup.rotation.y = angle;
+
+    function loadProgress() {
+        try {
+            const raw = localStorage.getItem(SAVE_KEY);
+            if (!raw) return null;
+            const data = JSON.parse(raw);
+            if (Date.now() - data.timestamp > SAVE_MAX_AGE_MS) {
+                localStorage.removeItem(SAVE_KEY);
+                return null;
+            }
+            return data;
+        } catch(e) {
+            console.log('Не удалось загрузить прогресс:', e.message);
+            return null;
+        }
     }
-    const tiltX = -state.droneVel.z * 0.5;
-    const tiltZ = state.droneVel.x * 0.5;
-    studentDroneGroup.rotation.x += (tiltX - studentDroneGroup.rotation.x) * 0.1;
-    studentDroneGroup.rotation.z += (tiltZ - studentDroneGroup.rotation.z) * 0.1;
-  }
-  
-  if(state.hintActive && state.hintLine){
-    const positions = state.hintLine.geometry.attributes.position.array;
-    positions[0] = state.dronePos.x;
-    positions[1] = state.dronePos.y;
-    positions[2] = state.dronePos.z;
-    positions[3] = state.targetPos.x;
-    positions[4] = state.targetPos.y;
-    positions[5] = state.targetPos.z;
-    state.hintLine.geometry.attributes.position.needsUpdate = true;
-  }
-}
 
-window.giveHint = function(){
-  if(state.gameCompleted || state.hintActive) return;
-  state.hintsUsed++; state.hintActive = true; state.lastHintTime = Date.now();
-  document.getElementById('hints-used').innerText = state.hintsUsed;
-  SFX.hint();
-  showNotification(`💡 Подсказка дана! Ученик видит путь к цели (8 сек).`, 'success');
-  
-  if(state.hintLine && scene) {
-    scene.remove(state.hintLine);
-    state.hintLine.geometry.dispose();
-    state.hintLine.material.dispose();
-    state.hintLine = null;
-  }
-  
-  const points = [state.dronePos.clone(), state.targetPos.clone()];
-  const geometry = new THREE.BufferGeometry().setFromPoints(points);
-  const material = new THREE.LineBasicMaterial({ 
-    color: 0x00ff00, 
-    transparent: true, 
-    opacity: 0.8 
-  });
-  state.hintLine = new THREE.Line(geometry, material);
-  scene.add(state.hintLine);
-  
-  if(state.hintTimeout) clearTimeout(state.hintTimeout);
-  state.hintTimeout = setTimeout(() => {
-    state.hintActive = false;
-    if(state.hintLine && scene){ 
-      scene.remove(state.hintLine); 
-      state.hintLine.geometry.dispose();
-      state.hintLine.material.dispose();
-      state.hintLine = null; 
+    function clearProgress() {
+        try { localStorage.removeItem(SAVE_KEY); } catch(e) {}
     }
-    showNotification("⚠️ Подсказка исчезла! Дайте новую, если нужно.", 'info');
-  }, 8000);
-  
-  saveProgress();
-}
 
-window.takeoverControl = function(){
-  if(state.gameCompleted || state.isControlling) return;
-  state.takeoversUsed++; state.isControlling = true;
-  document.getElementById('takeovers-used').innerText = state.takeoversUsed;
-  SFX.takeover();
-  showNotification(`🎮 Вы управляете 5 секунд! WASD — лететь, Space — вверх`, 'success');
-  document.getElementById('takeoverBtn').disabled = true;
-  document.getElementById('takeoverBtn').classList.add('active');
-  
-  if(state.controlTimeout) clearTimeout(state.controlTimeout);
-  state.controlTimeout = setTimeout(() => {
-    state.isControlling = false;
-    document.getElementById('takeoverBtn').disabled = false;
-    document.getElementById('takeoverBtn').classList.remove('active');
-    showNotification(`🤖 Управление возвращено ученику`, '');
-  }, 5000);
-  
-  saveProgress();
-}
-
-window.encourageStudent = function(){
-  if(state.gameCompleted) return;
-  state.encouragements++;
-  state.studentConfidence = Math.min(100, state.studentConfidence + 20);
-  state.studentAttention = Math.min(100, state.studentAttention + 15);
-  SFX.hint();
-  showNotification(`👍 Ученик подбодрен! Уверенность +20%`, 'success');
-  saveProgress();
-}
-
-const keys = {};
-window.addEventListener('keydown', (e) => { 
-  keys[e.key.toLowerCase()] = true; 
-  if(['arrowup','arrowdown','arrowleft','arrowright',' '].includes(e.key.toLowerCase())) e.preventDefault();
-  
-  if(e.key === 'h' || e.key === 'H') window.giveHint();
-  if(e.key === 't' || e.key === 'T') window.takeoverControl();
-  if(e.key === 'e' || e.key === 'E') window.encourageStudent();
-  if(e.key === 'r' || e.key === 'R') fullGameRestart();
-});
-window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
-window.addEventListener('blur', () => { for(let k in keys) keys[k] = false; });
-
-function handleManualControl(){
-  if(!state.isControlling) return;
-  const speed = 0.08;
-  if(keys['w'] || keys['arrowup']) state.droneVel.z -= speed;
-  if(keys['s'] || keys['arrowdown']) state.droneVel.z += speed;
-  if(keys['a'] || keys['arrowleft']) state.droneVel.x -= speed;
-  if(keys['d'] || keys['arrowright']) state.droneVel.x += speed;
-  if(keys[' '] || keys['shift']) state.droneVel.y += speed;
-  if(keys['control']) state.droneVel.y -= speed;
-}
-
-function createDetailedDrone(){
-  const droneGroup = new THREE.Group();
-  propellers = [];
-  const carbonMat = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.6, metalness: 0.8 });
-  const goldMat = new THREE.MeshStandardMaterial({ color: 0xd4af37, roughness: 0.15, metalness: 0.9 });
-  const titaniumMat = new THREE.MeshStandardMaterial({ color: 0x555555, roughness: 0.3, metalness: 0.7 });
-  const neonPropMat = new THREE.MeshStandardMaterial({ color: 0x00ffcc, roughness: 0.1, metalness: 0.1, transparent: true, opacity: 0.7 });
-  const plasticMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.5, metalness: 0.2 });
-  const lensMat = new THREE.MeshStandardMaterial({ color: 0x050505, roughness: 0.05, metalness: 1.0 });
-  const pcbMat = new THREE.MeshStandardMaterial({ color: 0x0f3d0f, roughness: 0.5, metalness: 0.2 });
-  
-  const bottomPlate = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.015, 0.45), carbonMat);
-  bottomPlate.position.y = -0.03; bottomPlate.castShadow = true;
-  droneGroup.add(bottomPlate);
-  const topPlate = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.015, 0.35), carbonMat);
-  topPlate.position.y = 0.05; topPlate.castShadow = true;
-  droneGroup.add(topPlate);
-  
-  const standoffGeo = new THREE.CylinderGeometry(0.01, 0.01, 0.065, 8);
-  [{x: 0.07, z: 0.15}, {x: -0.07, z: 0.15}, {x: 0.07, z: -0.15}, {x: -0.07, z: -0.15}].forEach(pos => {
-    const pillar = new THREE.Mesh(standoffGeo, titaniumMat);
-    pillar.position.set(pos.x, 0.01, pos.z);
-    droneGroup.add(pillar);
-  });
-  
-  const pcb = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.01, 0.12), pcbMat);
-  pcb.position.set(0, 0.01, 0);
-  droneGroup.add(pcb);
-  const heatsink = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.015, 0.1), titaniumMat);
-  heatsink.position.set(0, 0.02, 0);
-  droneGroup.add(heatsink);
-  
-  const armPositions = [
-    { x: 0.26, z: 0.26, angle: -Math.PI / 4 },
-    { x: -0.26, z: 0.26, angle: Math.PI / 4 },
-    { x: 0.26, z: -0.26, angle: Math.PI / 4 },
-    { x: -0.26, z: -0.26, angle: -Math.PI / 4 }
-  ];
-  
-  armPositions.forEach((pos, index) => {
-    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.36, 8), carbonMat);
-    arm.position.set(pos.x / 2, 0.01, pos.z / 2);
-    arm.rotation.z = Math.PI / 2; arm.rotation.y = pos.angle;
-    arm.castShadow = true;
-    droneGroup.add(arm);
-    const motorGroup = new THREE.Group();
-    motorGroup.position.set(pos.x, 0.03, pos.z);
-    const motorBase = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.04, 12), titaniumMat);
-    motorBase.castShadow = true; motorGroup.add(motorBase);
-    const motorBell = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.042, 0.03, 12), goldMat);
-    motorBell.position.y = 0.025; motorBell.castShadow = true; motorGroup.add(motorBell);
-    droneGroup.add(motorGroup);
-    
-    const guard = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.01, 8, 24), plasticMat);
-    guard.rotation.x = Math.PI / 2; guard.position.set(pos.x, 0.06, pos.z);
-    droneGroup.add(guard);
-    
-    const led = new THREE.Mesh(new THREE.SphereGeometry(0.015, 8, 8), 
-      new THREE.MeshBasicMaterial({ color: (index < 2) ? 0x00ff00 : 0xff0000 }));
-    led.position.set(pos.x, -0.02, pos.z);
-    droneGroup.add(led);
-    
-    const propGroup = new THREE.Group();
-    propGroup.position.set(pos.x, 0.075, pos.z);
-    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.02, 8), titaniumMat);
-    propGroup.add(hub);
-    const nut = new THREE.Mesh(new THREE.ConeGeometry(0.01, 0.015, 6), goldMat);
-    nut.position.y = 0.015; propGroup.add(nut);
-    for(let i = 0; i < 3; i++){
-      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.006, 0.022), neonPropMat);
-      blade.position.set(0, 0.005, 0);
-      blade.geometry.translate(0.06, 0, 0);
-      blade.rotation.x = 0.15; blade.rotation.y = (Math.PI * 2 / 3) * i;
-      propGroup.add(blade);
+    function syncUIFromState() {
+        document.getElementById('tasks-completed').innerText = state.tasksCompleted;
+        document.getElementById('score-value').innerText = state.score;
+        document.getElementById('mission-timer').innerText = state.timeLeft;
+        document.getElementById('student-confidence').innerText = Math.round(state.studentConfidence);
+        document.getElementById('student-attention').innerText = Math.round(state.studentAttention);
+        document.getElementById('student-errors').innerText = state.studentErrors;
+        document.getElementById('hints-used').innerText = state.hintsUsed;
+        document.getElementById('takeovers-used').innerText = state.takeoversUsed;
     }
-    droneGroup.add(propGroup); propellers.push(propGroup);
-  });
-  
-  const cameraGroup = new THREE.Group();
-  cameraGroup.position.set(0, 0.01, 0.22);
-  const mountGeo = new THREE.BoxGeometry(0.01, 0.08, 0.08);
-  const leftMount = new THREE.Mesh(mountGeo, titaniumMat); leftMount.position.x = -0.06;
-  const rightMount = leftMount.clone(); rightMount.position.x = 0.06;
-  cameraGroup.add(leftMount, rightMount);
-  
-  const camBodyGroup = new THREE.Group(); camBodyGroup.rotation.x = -0.25;
-  const camBody = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.07, 0.07), plasticMat);
-  camBody.castShadow = true; camBodyGroup.add(camBody);
-  const lensRing = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.04, 12), titaniumMat);
-  lensRing.rotation.x = Math.PI / 2; lensRing.position.set(0, 0, 0.04);
-  camBodyGroup.add(lensRing);
-  const lensGlass = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.005, 12), lensMat);
-  lensGlass.rotation.x = Math.PI / 2; lensGlass.position.set(0, 0, 0.061);
-  camBodyGroup.add(lensGlass);
-  cameraGroup.add(camBodyGroup);
-  droneGroup.add(cameraGroup);
-  
-  const battery = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.06, 0.18), plasticMat);
-  battery.position.set(0, 0.09, -0.05); battery.castShadow = true;
-  droneGroup.add(battery);
-  
-  const droneLight = new THREE.PointLight(0x00ccff, 1.5, 4);
-  droneLight.position.set(0, -0.03, 0);
-  droneGroup.add(droneLight);
-  
-  return droneGroup;
-}
 
-function createProceduralSkybox(){
-  const canvas = document.createElement('canvas');
-  canvas.width = 2048;
-  canvas.height = 1024;
-  const ctx = canvas.getContext('2d');
-  
-  const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
-  gradient.addColorStop(0, '#000010');
-  gradient.addColorStop(0.3, '#0a0a3a');
-  gradient.addColorStop(0.5, '#1a1a5a');
-  gradient.addColorStop(0.7, '#2a1a4a');
-  gradient.addColorStop(0.9, '#1a0a2a');
-  gradient.addColorStop(1, '#050510');
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  
-  for(let i = 0; i < 1500; i++){
-    const x = Math.random() * canvas.width;
-    const y = Math.random() * canvas.height * 0.85;
-    const size = Math.random() * 1.8;
-    const brightness = Math.random();
-    
-    ctx.beginPath();
-    ctx.arc(x, y, size, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(255, 255, 255, ${0.3 + brightness * 0.7})`;
-    ctx.fill();
-    
-    if(brightness > 0.9){
-      const glow = ctx.createRadialGradient(x, y, 0, x, y, size * 4);
-      glow.addColorStop(0, `rgba(200, 220, 255, ${brightness * 0.8})`);
-      glow.addColorStop(1, 'rgba(200, 220, 255, 0)');
-      ctx.fillStyle = glow;
-      ctx.fillRect(x - size * 4, y - size * 4, size * 8, size * 8);
+    // ====== ОСНОВНЫЕ ФУНКЦИИ ======
+
+    function exitToMenu() {
+        if (state.animationId) { cancelAnimationFrame(state.animationId); state.animationId = null; }
+        if (state.timerInterval) { clearInterval(state.timerInterval); state.timerInterval = null; }
+        if (state.controlTimeout) { clearTimeout(state.controlTimeout); state.controlTimeout = null; }
+        if (state.hintTimeout) { clearTimeout(state.hintTimeout); state.hintTimeout = null; }
+        document.getElementById('victoryModal').classList.remove('show');
+        document.getElementById('defeatModal').classList.remove('show');
+        document.getElementById('simulator-page').classList.remove('active');
+        setTimeout(() => { document.getElementById('intro-page').classList.remove('hidden'); }, 300);
+        const music = document.getElementById('bg-music');
+        music.pause();
+        music.currentTime = 0;
+        clearProgress();
     }
-  }
-  
-  const starColors = [
-    { r: 255, g: 150, b: 150 },
-    { r: 150, g: 200, b: 255 },
-    { r: 255, g: 240, b: 180 }
-  ];
-  for(let i = 0; i < 80; i++){
-    const x = Math.random() * canvas.width;
-    const y = Math.random() * canvas.height * 0.7;
-    const color = starColors[Math.floor(Math.random() * starColors.length)];
-    const size = 1 + Math.random() * 2;
-    
-    ctx.beginPath();
-    ctx.arc(x, y, size, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(${color.r}, ${color.g}, ${color.b}, 0.9)`;
-    ctx.fill();
-    
-    const glow = ctx.createRadialGradient(x, y, 0, x, y, size * 3);
-    glow.addColorStop(0, `rgba(${color.r}, ${color.g}, ${color.b}, 0.6)`);
-    glow.addColorStop(1, `rgba(${color.r}, ${color.g}, ${color.b}, 0)`);
-    ctx.fillStyle = glow;
-    ctx.fillRect(x - size * 3, y - size * 3, size * 6, size * 6);
-  }
-  
-  for(let i = 0; i < 5; i++){
-    const x = Math.random() * canvas.width;
-    const y = Math.random() * canvas.height * 0.6;
-    const radius = 100 + Math.random() * 200;
-    const hue = Math.random() * 60 + 240;
-    
-    const nebula = ctx.createRadialGradient(x, y, 0, x, y, radius);
-    nebula.addColorStop(0, `hsla(${hue}, 70%, 50%, 0.15)`);
-    nebula.addColorStop(0.5, `hsla(${hue}, 70%, 40%, 0.08)`);
-    nebula.addColorStop(1, `hsla(${hue}, 70%, 30%, 0)`);
-    
-    ctx.fillStyle = nebula;
-    ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
-  }
-  
-  const horizonGradient = ctx.createLinearGradient(0, canvas.height * 0.85, 0, canvas.height);
-  horizonGradient.addColorStop(0, 'rgba(100, 100, 255, 0)');
-  horizonGradient.addColorStop(0.5, 'rgba(100, 150, 255, 0.15)');
-  horizonGradient.addColorStop(1, 'rgba(50, 50, 150, 0.3)');
-  ctx.fillStyle = horizonGradient;
-  ctx.fillRect(0, canvas.height * 0.85, canvas.width, canvas.height * 0.15);
-  
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.mapping = THREE.EquirectangularReflectionMapping;
-  return texture;
-}
 
-function createStarField(){
-  const geometry = new THREE.BufferGeometry();
-  const count = 3000;
-  const positions = new Float32Array(count * 3);
-  const colors = new Float32Array(count * 3);
-  const sizes = new Float32Array(count);
-  
-  for(let i = 0; i < count; i++){
-    const radius = 80 + Math.random() * 40;
-    const theta = Math.random() * Math.PI * 2;
-    const phi = Math.acos(2 * Math.random() - 1);
-    
-    positions[i * 3] = radius * Math.sin(phi) * Math.cos(theta);
-    positions[i * 3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
-    positions[i * 3 + 2] = radius * Math.cos(phi);
-    
-    const colorType = Math.random();
-    if(colorType < 0.7){
-      colors[i * 3] = 1; colors[i * 3 + 1] = 1; colors[i * 3 + 2] = 1;
-    } else if(colorType < 0.85){
-      colors[i * 3] = 0.7; colors[i * 3 + 1] = 0.85; colors[i * 3 + 2] = 1;
-    } else if(colorType < 0.95){
-      colors[i * 3] = 1; colors[i * 3 + 1] = 0.95; colors[i * 3 + 2] = 0.7;
-    } else {
-      colors[i * 3] = 1; colors[i * 3 + 1] = 0.6; colors[i * 3 + 2] = 0.6;
+    function showVictoryModal() {
+        if (state.gameCompleted) return;
+        state.gameCompleted = true;
+        if (state.timerInterval) { clearInterval(state.timerInterval); state.timerInterval = null; }
+        document.getElementById('victoryTasks').innerText = state.tasksCompleted;
+        document.getElementById('victoryScore').innerText = state.score;
+        document.getElementById('victoryHints').innerText = state.hintsUsed;
+        document.getElementById('victoryTakeovers').innerText = state.takeoversUsed;
+        document.getElementById('victoryModal').classList.add('show');
+        SFX.victory();
+        clearProgress();
     }
-    
-    sizes[i] = 0.1 + Math.random() * 0.4;
-  }
-  
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
-  
-  const material = new THREE.PointsMaterial({
-    size: 0.3,
-    vertexColors: true,
-    transparent: true,
-    opacity: 0.9,
-    sizeAttenuation: true,
-    blending: THREE.AdditiveBlending
-  });
-  
-  return new THREE.Points(geometry, material);
-}
 
-function createNebula(){
-  const group = new THREE.Group();
-  
-  for(let i = 0; i < 8; i++){
-    const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 256;
-    const ctx = canvas.getContext('2d');
-    
-    const gradient = ctx.createRadialGradient(128, 128, 0, 128, 128, 128);
-    const hue = Math.random() * 60 + 240;
-    gradient.addColorStop(0, `hsla(${hue}, 80%, 60%, 0.4)`);
-    gradient.addColorStop(0.4, `hsla(${hue}, 70%, 40%, 0.2)`);
-    gradient.addColorStop(1, `hsla(${hue}, 60%, 30%, 0)`);
-    
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, 256, 256);
-    
-    const texture = new THREE.CanvasTexture(canvas);
-    const material = new THREE.SpriteMaterial({
-      map: texture,
-      transparent: true,
-      opacity: 0.3,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false
+    function showDefeatModal() {
+        if (state.gameCompleted) return;
+        state.gameCompleted = true;
+        if (state.timerInterval) { clearInterval(state.timerInterval); state.timerInterval = null; }
+        document.getElementById('defeatTasks').innerText = state.tasksCompleted;
+        document.getElementById('defeatErrors').innerText = state.studentErrors;
+        document.getElementById('defeatModal').classList.add('show');
+        clearProgress();
+    }
+
+    function startMissionTimer(keepTime = false) {
+        if (state.timerInterval) clearInterval(state.timerInterval);
+        if (!keepTime) {
+            state.timeLeft = DIFFICULTY_CONFIG[currentDifficulty].MISSION_TIME;
+        }
+        const timerElem = document.getElementById('mission-timer');
+        if (timerElem) timerElem.innerText = state.timeLeft;
+
+        state.timerInterval = setInterval(() => {
+            if (state.gameCompleted) return;
+            state.timeLeft--;
+            if (timerElem) timerElem.innerText = state.timeLeft;
+            if (state.timeLeft === 60) showNotification("⏰ Осталась 1 минута!", '');
+            if (state.timeLeft === 30) showNotification("⏰ Осталось 30 секунд!", 'hit');
+
+            if (state.timeLeft % 5 === 0) saveProgress();
+
+            if (state.timeLeft <= 0) {
+                clearInterval(state.timerInterval);
+                state.timerInterval = null;
+                if (state.tasksCompleted >= DIFFICULTY_CONFIG[currentDifficulty].taskCount) showVictoryModal();
+                else showDefeatModal();
+            }
+        }, 1000);
+    }
+
+    function generateNewTask() {
+        state.targetPos.set(
+            (Math.random() - 0.5) * 12,
+            1.5 + Math.random() * 2,
+            (Math.random() - 0.5) * 12
+        );
+        if (targetMarker) targetMarker.position.copy(state.targetPos);
+        if (targetRing) targetRing.position.copy(state.targetPos);
+        state.lastHintTime = Date.now();
+        state.hintActive = false;
+        showNotification(`🎯 Задание ${state.tasksCompleted + 1}: долететь до оранжевой цели!`, '');
+        saveProgress();
+    }
+
+    function startStudentAI() {
+        state.studentConfidence = 100;
+        state.studentAttention = 100;
+        state.studentErrors = 0;
+        state.tasksCompleted = 0;
+        state.score = 0;
+        state.hintsUsed = 0;
+        state.takeoversUsed = 0;
+        state.encouragements = 0;
+        state.lastHintTime = Date.now();
+        state.hintActive = false;
+        state._warnedLowConf = false;
+
+        document.getElementById('student-confidence').innerText = '100';
+        document.getElementById('student-attention').innerText = '100';
+        document.getElementById('student-errors').innerText = '0';
+        document.getElementById('tasks-completed').innerText = '0';
+        document.getElementById('score-value').innerText = '0';
+        document.getElementById('hints-used').innerText = '0';
+        document.getElementById('takeovers-used').innerText = '0';
+
+        generateNewTask();
+        setTimeout(() => { showNotification("🎓 Ученик ждёт ваших указаний! Дайте подсказку!", 'info'); }, 2000);
+    }
+
+    function updateStudentAI() {
+        if (state.gameCompleted) return;
+        const config = DIFFICULTY_CONFIG[currentDifficulty];
+        const now = Date.now();
+        const toTarget = new THREE.Vector3().subVectors(state.targetPos, state.dronePos);
+        const distance = toTarget.length();
+
+        if (distance < 1.5) {
+            state.tasksCompleted++;
+            state.score += 20 + Math.floor(state.studentConfidence / 5);
+            document.getElementById('tasks-completed').innerText = state.tasksCompleted;
+            document.getElementById('score-value').innerText = state.score;
+            SFX.success();
+            showNotification(`✅ Задание выполнено! (${state.tasksCompleted}/${config.taskCount})`, 'success');
+            if (state.tasksCompleted >= config.taskCount) {
+                showVictoryModal();
+                return;
+            }
+            generateNewTask();
+            return;
+        }
+
+        if (!state.hintActive && !state.isControlling) {
+            state.droneVel.x += (Math.random() - 0.5) * 0.1;
+            state.droneVel.z += (Math.random() - 0.5) * 0.1;
+            state.droneVel.y += (Math.random() - 0.5) * 0.05;
+            const timeWithoutHint = (now - state.lastHintTime) / 1000;
+            if (timeWithoutHint > 10) {
+                state.studentConfidence = Math.max(0, state.studentConfidence - config.confidenceDecay * 0.1);
+                state.studentAttention = Math.max(0, state.studentAttention - 0.05);
+            }
+            if (!state._warnedLowConf && state.studentConfidence < 30) {
+                state._warnedLowConf = true;
+                SFX.warning();
+                showNotification("⚠️ Ученик теряет уверенность! Дайте подсказку!", 'hit');
+            }
+            if (state.studentConfidence > 40) state._warnedLowConf = false;
+
+            if (state.studentConfidence <= 0) {
+                state.studentErrors++;
+                document.getElementById('student-errors').innerText = state.studentErrors;
+                showNotification("❌ Ученик запаниковал! Задание провалено.", 'hit');
+                generateNewTask();
+            }
+        } else if (state.hintActive && !state.isControlling) {
+            const direction = toTarget.clone().normalize();
+            const noise = (1 - config.studentSkill) * 0.5;
+            direction.x += (Math.random() - 0.5) * noise;
+            direction.z += (Math.random() - 0.5) * noise;
+            direction.y += (Math.random() - 0.5) * noise * 0.5;
+            direction.normalize();
+            const speed = 0.03 + config.studentSkill * 0.04;
+            state.droneVel.x += direction.x * speed;
+            state.droneVel.z += direction.z * speed;
+            state.droneVel.y += direction.y * speed * 0.5;
+            state.studentConfidence = Math.min(100, state.studentConfidence + 0.1);
+            state.studentAttention = Math.min(100, state.studentAttention + 0.05);
+        }
+
+        state.droneVel.multiplyScalar(state.isControlling ? 0.92 : 0.95);
+        state.dronePos.add(state.droneVel);
+        state.dronePos.x = Math.max(-15, Math.min(15, state.dronePos.x));
+        state.dronePos.z = Math.max(-15, Math.min(15, state.dronePos.z));
+        state.dronePos.y = Math.max(0.5, Math.min(6, state.dronePos.y));
+
+        document.getElementById('student-confidence').innerText = Math.round(state.studentConfidence);
+        document.getElementById('student-attention').innerText = Math.round(state.studentAttention);
+
+        const statusEl = document.getElementById('student-status');
+        if (state.studentConfidence > 70 && state.studentAttention > 70) {
+            statusEl.className = 'student-status good';
+            statusEl.innerText = '✅ Учится хорошо';
+        } else if (state.studentConfidence > 40 && state.studentAttention > 40) {
+            statusEl.className = 'student-status warning';
+            statusEl.innerText = '⚠️ Нужна помощь';
+        } else {
+            statusEl.className = 'student-status danger';
+            statusEl.innerText = '❌ Критическое состояние';
+        }
+
+        if (studentDroneGroup) {
+            studentDroneGroup.position.copy(state.dronePos);
+            if (state.droneVel.length() > 0.01) {
+                const angle = Math.atan2(state.droneVel.x, state.droneVel.z);
+                studentDroneGroup.rotation.y = angle;
+            }
+            const tiltX = -state.droneVel.z * 0.5;
+            const tiltZ = state.droneVel.x * 0.5;
+            studentDroneGroup.rotation.x += (tiltX - studentDroneGroup.rotation.x) * 0.1;
+            studentDroneGroup.rotation.z += (tiltZ - studentDroneGroup.rotation.z) * 0.1;
+        }
+
+        if (state.hintActive && state.hintLine) {
+            const positions = state.hintLine.geometry.attributes.position.array;
+            positions[0] = state.dronePos.x;
+            positions[1] = state.dronePos.y;
+            positions[2] = state.dronePos.z;
+            positions[3] = state.targetPos.x;
+            positions[4] = state.targetPos.y;
+            positions[5] = state.targetPos.z;
+            state.hintLine.geometry.attributes.position.needsUpdate = true;
+        }
+    }
+
+    function handleManualControl() {
+        if (!state.isControlling) return;
+        const speed = 0.08;
+        if (keys['w'] || keys['arrowup']) state.droneVel.z -= speed;
+        if (keys['s'] || keys['arrowdown']) state.droneVel.z += speed;
+        if (keys['a'] || keys['arrowleft']) state.droneVel.x -= speed;
+        if (keys['d'] || keys['arrowright']) state.droneVel.x += speed;
+        if (keys[' '] || keys['shift']) state.droneVel.y += speed;
+        if (keys['control']) state.droneVel.y -= speed;
+    }
+
+    // ====== ДЕЙСТВИЯ НАСТАВНИКА ======
+
+    function giveHint() {
+        if (state.gameCompleted || state.hintActive) return;
+        state.hintsUsed++;
+        state.hintActive = true;
+        state.lastHintTime = Date.now();
+        document.getElementById('hints-used').innerText = state.hintsUsed;
+        SFX.hint();
+        showNotification(`💡 Подсказка дана! Ученик видит путь к цели (8 сек).`, 'success');
+
+        if (state.hintLine && scene) {
+            scene.remove(state.hintLine);
+            state.hintLine.geometry.dispose();
+            state.hintLine.material.dispose();
+            state.hintLine = null;
+        }
+
+        const points = [state.dronePos.clone(), state.targetPos.clone()];
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+        const material = new THREE.LineBasicMaterial({
+            color: 0x00ff00,
+            transparent: true,
+            opacity: 0.8
+        });
+        state.hintLine = new THREE.Line(geometry, material);
+        scene.add(state.hintLine);
+
+        if (state.hintTimeout) clearTimeout(state.hintTimeout);
+        state.hintTimeout = setTimeout(() => {
+            state.hintActive = false;
+            if (state.hintLine && scene) {
+                scene.remove(state.hintLine);
+                state.hintLine.geometry.dispose();
+                state.hintLine.material.dispose();
+                state.hintLine = null;
+            }
+            showNotification("⚠️ Подсказка исчезла! Дайте новую, если нужно.", 'info');
+        }, 8000);
+
+        saveProgress();
+    }
+
+    function takeoverControl() {
+        if (state.gameCompleted || state.isControlling) return;
+        state.takeoversUsed++;
+        state.isControlling = true;
+        document.getElementById('takeovers-used').innerText = state.takeoversUsed;
+        SFX.takeover();
+        showNotification(`🎮 Вы управляете 5 секунд! WASD — лететь, Space — вверх`, 'success');
+        document.getElementById('takeoverBtn').disabled = true;
+        document.getElementById('takeoverBtn').classList.add('active');
+
+        if (state.controlTimeout) clearTimeout(state.controlTimeout);
+        state.controlTimeout = setTimeout(() => {
+            state.isControlling = false;
+            document.getElementById('takeoverBtn').disabled = false;
+            document.getElementById('takeoverBtn').classList.remove('active');
+            showNotification(`🤖 Управление возвращено ученику`, '');
+        }, 5000);
+
+        saveProgress();
+    }
+
+    function encourageStudent() {
+        if (state.gameCompleted) return;
+        state.encouragements++;
+        state.studentConfidence = Math.min(100, state.studentConfidence + 20);
+        state.studentAttention = Math.min(100, state.studentAttention + 15);
+        SFX.hint();
+        showNotification(`👍 Ученик подбодрен! Уверенность +20%`, 'success');
+        saveProgress();
+    }
+
+    // ====== СОЗДАНИЕ 3D ОБЪЕКТОВ ======
+
+    function createDetailedDrone() {
+        const droneGroup = new THREE.Group();
+        propellers = [];
+        const carbonMat = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.6, metalness: 0.8 });
+        const goldMat = new THREE.MeshStandardMaterial({ color: 0xd4af37, roughness: 0.15, metalness: 0.9 });
+        const titaniumMat = new THREE.MeshStandardMaterial({ color: 0x555555, roughness: 0.3, metalness: 0.7 });
+        const neonPropMat = new THREE.MeshStandardMaterial({ color: 0x00ffcc, roughness: 0.1, metalness: 0.1, transparent: true, opacity: 0.7 });
+        const plasticMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.5, metalness: 0.2 });
+        const lensMat = new THREE.MeshStandardMaterial({ color: 0x050505, roughness: 0.05, metalness: 1.0 });
+        const pcbMat = new THREE.MeshStandardMaterial({ color: 0x0f3d0f, roughness: 0.5, metalness: 0.2 });
+
+        const bottomPlate = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.015, 0.45), carbonMat);
+        bottomPlate.position.y = -0.03;
+        bottomPlate.castShadow = true;
+        droneGroup.add(bottomPlate);
+        const topPlate = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.015, 0.35), carbonMat);
+        topPlate.position.y = 0.05;
+        topPlate.castShadow = true;
+        droneGroup.add(topPlate);
+
+        const standoffGeo = new THREE.CylinderGeometry(0.01, 0.01, 0.065, 8);
+        [{x: 0.07, z: 0.15}, {x: -0.07, z: 0.15}, {x: 0.07, z: -0.15}, {x: -0.07, z: -0.15}].forEach(pos => {
+            const pillar = new THREE.Mesh(standoffGeo, titaniumMat);
+            pillar.position.set(pos.x, 0.01, pos.z);
+            droneGroup.add(pillar);
+        });
+
+        const pcb = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.01, 0.12), pcbMat);
+        pcb.position.set(0, 0.01, 0);
+        droneGroup.add(pcb);
+        const heatsink = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.015, 0.1), titaniumMat);
+        heatsink.position.set(0, 0.02, 0);
+        droneGroup.add(heatsink);
+
+        const armPositions = [
+            { x: 0.26, z: 0.26, angle: -Math.PI / 4 },
+            { x: -0.26, z: 0.26, angle: Math.PI / 4 },
+            { x: 0.26, z: -0.26, angle: Math.PI / 4 },
+            { x: -0.26, z: -0.26, angle: -Math.PI / 4 }
+        ];
+
+        armPositions.forEach((pos, index) => {
+            const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.36, 8), carbonMat);
+            arm.position.set(pos.x / 2, 0.01, pos.z / 2);
+            arm.rotation.z = Math.PI / 2;
+            arm.rotation.y = pos.angle;
+            arm.castShadow = true;
+            droneGroup.add(arm);
+            const motorGroup = new THREE.Group();
+            motorGroup.position.set(pos.x, 0.03, pos.z);
+            const motorBase = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.04, 12), titaniumMat);
+            motorBase.castShadow = true;
+            motorGroup.add(motorBase);
+            const motorBell = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.042, 0.03, 12), goldMat);
+            motorBell.position.y = 0.025;
+            motorBell.castShadow = true;
+            motorGroup.add(motorBell);
+            droneGroup.add(motorGroup);
+
+            const guard = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.01, 8, 24), plasticMat);
+            guard.rotation.x = Math.PI / 2;
+            guard.position.set(pos.x, 0.06, pos.z);
+            droneGroup.add(guard);
+
+            const led = new THREE.Mesh(new THREE.SphereGeometry(0.015, 8, 8),
+                new THREE.MeshBasicMaterial({ color: (index < 2) ? 0x00ff00 : 0xff0000 }));
+            led.position.set(pos.x, -0.02, pos.z);
+            droneGroup.add(led);
+
+            const propGroup = new THREE.Group();
+            propGroup.position.set(pos.x, 0.075, pos.z);
+            const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.02, 8), titaniumMat);
+            propGroup.add(hub);
+            const nut = new THREE.Mesh(new THREE.ConeGeometry(0.01, 0.015, 6), goldMat);
+            nut.position.y = 0.015;
+            propGroup.add(nut);
+            for (let i = 0; i < 3; i++) {
+                const blade = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.006, 0.022), neonPropMat);
+                blade.position.set(0, 0.005, 0);
+                blade.geometry.translate(0.06, 0, 0);
+                blade.rotation.x = 0.15;
+                blade.rotation.y = (Math.PI * 2 / 3) * i;
+                propGroup.add(blade);
+            }
+            droneGroup.add(propGroup);
+            propellers.push(propGroup);
+        });
+
+        const cameraGroup = new THREE.Group();
+        cameraGroup.position.set(0, 0.01, 0.22);
+        const mountGeo = new THREE.BoxGeometry(0.01, 0.08, 0.08);
+        const leftMount = new THREE.Mesh(mountGeo, titaniumMat);
+        leftMount.position.x = -0.06;
+        const rightMount = leftMount.clone();
+        rightMount.position.x = 0.06;
+        cameraGroup.add(leftMount, rightMount);
+
+        const camBodyGroup = new THREE.Group();
+        camBodyGroup.rotation.x = -0.25;
+        const camBody = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.07, 0.07), plasticMat);
+        camBody.castShadow = true;
+        camBodyGroup.add(camBody);
+        const lensRing = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.04, 12), titaniumMat);
+        lensRing.rotation.x = Math.PI / 2;
+        lensRing.position.set(0, 0, 0.04);
+        camBodyGroup.add(lensRing);
+        const lensGlass = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.005, 12), lensMat);
+        lensGlass.rotation.x = Math.PI / 2;
+        lensGlass.position.set(0, 0, 0.061);
+        camBodyGroup.add(lensGlass);
+        cameraGroup.add(camBodyGroup);
+        droneGroup.add(cameraGroup);
+
+        const battery = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.06, 0.18), plasticMat);
+        battery.position.set(0, 0.09, -0.05);
+        battery.castShadow = true;
+        droneGroup.add(battery);
+
+        const droneLight = new THREE.PointLight(0x00ccff, 1.5, 4);
+        droneLight.position.set(0, -0.03, 0);
+        droneGroup.add(droneLight);
+
+        return droneGroup;
+    }
+
+    function createProceduralSkybox() {
+        const canvas = document.createElement('canvas');
+        canvas.width = 2048;
+        canvas.height = 1024;
+        const ctx = canvas.getContext('2d');
+
+        const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+        gradient.addColorStop(0, '#000010');
+        gradient.addColorStop(0.3, '#0a0a3a');
+        gradient.addColorStop(0.5, '#1a1a5a');
+        gradient.addColorStop(0.7, '#2a1a4a');
+        gradient.addColorStop(0.9, '#1a0a2a');
+        gradient.addColorStop(1, '#050510');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        for (let i = 0; i < 1500; i++) {
+            const x = Math.random() * canvas.width;
+            const y = Math.random() * canvas.height * 0.85;
+            const size = Math.random() * 1.8;
+            const brightness = Math.random();
+
+            ctx.beginPath();
+            ctx.arc(x, y, size, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(255, 255, 255, ${0.3 + brightness * 0.7})`;
+            ctx.fill();
+
+            if (brightness > 0.9) {
+                const glow = ctx.createRadialGradient(x, y, 0, x, y, size * 4);
+                glow.addColorStop(0, `rgba(200, 220, 255, ${brightness * 0.8})`);
+                glow.addColorStop(1, 'rgba(200, 220, 255, 0)');
+                ctx.fillStyle = glow;
+                ctx.fillRect(x - size * 4, y - size * 4, size * 8, size * 8);
+            }
+        }
+
+        const starColors = [
+            { r: 255, g: 150, b: 150 },
+            { r: 150, g: 200, b: 255 },
+            { r: 255, g: 240, b: 180 }
+        ];
+        for (let i = 0; i < 80; i++) {
+            const x = Math.random() * canvas.width;
+            const y = Math.random() * canvas.height * 0.7;
+            const color = starColors[Math.floor(Math.random() * starColors.length)];
+            const size = 1 + Math.random() * 2;
+
+            ctx.beginPath();
+            ctx.arc(x, y, size, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(${color.r}, ${color.g}, ${color.b}, 0.9)`;
+            ctx.fill();
+
+            const glow = ctx.createRadialGradient(x, y, 0, x, y, size * 3);
+            glow.addColorStop(0, `rgba(${color.r}, ${color.g}, ${color.b}, 0.6)`);
+            glow.addColorStop(1, `rgba(${color.r}, ${color.g}, ${color.b}, 0)`);
+            ctx.fillStyle = glow;
+            ctx.fillRect(x - size * 3, y - size * 3, size * 6, size * 6);
+        }
+
+        for (let i = 0; i < 5; i++) {
+            const x = Math.random() * canvas.width;
+            const y = Math.random() * canvas.height * 0.6;
+            const radius = 100 + Math.random() * 200;
+            const hue = Math.random() * 60 + 240;
+
+            const nebula = ctx.createRadialGradient(x, y, 0, x, y, radius);
+            nebula.addColorStop(0, `hsla(${hue}, 70%, 50%, 0.15)`);
+            nebula.addColorStop(0.5, `hsla(${hue}, 70%, 40%, 0.08)`);
+            nebula.addColorStop(1, `hsla(${hue}, 70%, 30%, 0)`);
+
+            ctx.fillStyle = nebula;
+            ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+        }
+
+        const horizonGradient = ctx.createLinearGradient(0, canvas.height * 0.85, 0, canvas.height);
+        horizonGradient.addColorStop(0, 'rgba(100, 100, 255, 0)');
+        horizonGradient.addColorStop(0.5, 'rgba(100, 150, 255, 0.15)');
+        horizonGradient.addColorStop(1, 'rgba(50, 50, 150, 0.3)');
+        ctx.fillStyle = horizonGradient;
+        ctx.fillRect(0, canvas.height * 0.85, canvas.width, canvas.height * 0.15);
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.mapping = THREE.EquirectangularReflectionMapping;
+        return texture;
+    }
+
+    function createStarField() {
+        const geometry = new THREE.BufferGeometry();
+        const count = 3000;
+        const positions = new Float32Array(count * 3);
+        const colors = new Float32Array(count * 3);
+        const sizes = new Float32Array(count);
+
+        for (let i = 0; i < count; i++) {
+            const radius = 80 + Math.random() * 40;
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos(2 * Math.random() - 1);
+
+            positions[i * 3] = radius * Math.sin(phi) * Math.cos(theta);
+            positions[i * 3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
+            positions[i * 3 + 2] = radius * Math.cos(phi);
+
+            const colorType = Math.random();
+            if (colorType < 0.7) {
+                colors[i * 3] = 1;
+                colors[i * 3 + 1] = 1;
+                colors[i * 3 + 2] = 1;
+            } else if (colorType < 0.85) {
+                colors[i * 3] = 0.7;
+                colors[i * 3 + 1] = 0.85;
+                colors[i * 3 + 2] = 1;
+            } else if (colorType < 0.95) {
+                colors[i * 3] = 1;
+                colors[i * 3 + 1] = 0.95;
+                colors[i * 3 + 2] = 0.7;
+            } else {
+                colors[i * 3] = 1;
+                colors[i * 3 + 1] = 0.6;
+                colors[i * 3 + 2] = 0.6;
+            }
+
+            sizes[i] = 0.1 + Math.random() * 0.4;
+        }
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+
+        const material = new THREE.PointsMaterial({
+            size: 0.3,
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.9,
+            sizeAttenuation: true,
+            blending: THREE.AdditiveBlending
+        });
+
+        return new THREE.Points(geometry, material);
+    }
+
+    function createNebula() {
+        const group = new THREE.Group();
+
+        for (let i = 0; i < 8; i++) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256;
+            canvas.height = 256;
+            const ctx = canvas.getContext('2d');
+
+            const gradient = ctx.createRadialGradient(128, 128, 0, 128, 128, 128);
+            const hue = Math.random() * 60 + 240;
+            gradient.addColorStop(0, `hsla(${hue}, 80%, 60%, 0.4)`);
+            gradient.addColorStop(0.4, `hsla(${hue}, 70%, 40%, 0.2)`);
+            gradient.addColorStop(1, `hsla(${hue}, 60%, 30%, 0)`);
+
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, 256, 256);
+
+            const texture = new THREE.CanvasTexture(canvas);
+            const material = new THREE.SpriteMaterial({
+                map: texture,
+                transparent: true,
+                opacity: 0.3,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
+            });
+
+            const sprite = new THREE.Sprite(material);
+            const radius = 40 + Math.random() * 30;
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos(2 * Math.random() - 1);
+
+            sprite.position.set(
+                radius * Math.sin(phi) * Math.cos(theta),
+                radius * Math.sin(phi) * Math.sin(theta) * 0.5 + 10,
+                radius * Math.cos(phi)
+            );
+            sprite.scale.set(30 + Math.random() * 20, 30 + Math.random() * 20, 1);
+
+            group.add(sprite);
+        }
+
+        return group;
+    }
+
+    // ====== ИНИЦИАЛИЗАЦИЯ СИМУЛЯТОРА ======
+
+    function cleanupScene() {
+        if (renderer) {
+            if (renderer.domElement && renderer.domElement.parentNode) {
+                renderer.domElement.parentNode.removeChild(renderer.domElement);
+            }
+            renderer.dispose();
+            renderer = null;
+        }
+        if (scene) {
+            scene.traverse(obj => {
+                if (obj.geometry) obj.geometry.dispose();
+                if (obj.material) {
+                    if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
+                    else obj.material.dispose();
+                }
+            });
+            scene = null;
+        }
+        if (state.hintLine && scene) {
+            scene.remove(state.hintLine);
+            state.hintLine.geometry.dispose();
+            state.hintLine.material.dispose();
+            state.hintLine = null;
+        }
+        propellers = [];
+        studentDroneGroup = null;
+        targetMarker = null;
+        targetRing = null;
+        state.starsMesh = null;
+        state.nebulaMesh = null;
+    }
+
+    function initSimulator() {
+        // Проверка загрузки Three.js
+        if (typeof THREE === 'undefined') {
+            console.error('Three.js не загружен!');
+            showNotification('❌ Ошибка: Three.js не загружен. Обновите страницу.', 'hit');
+            return;
+        }
+
+        cleanupScene();
+
+        state.gameCompleted = false;
+        state.dronePos.set(0, 2, 0);
+        state.droneVel.set(0, 0, 0);
+        state.propAngle = 0;
+
+        scene = new THREE.Scene();
+
+        const skyboxTexture = createProceduralSkybox();
+        scene.background = skyboxTexture;
+        scene.environment = skyboxTexture;
+        scene.fog = new THREE.FogExp2(0x0a0a2a, 0.008);
+
+        state.starsMesh = createStarField();
+        scene.add(state.starsMesh);
+
+        state.nebulaMesh = createNebula();
+        scene.add(state.nebulaMesh);
+
+        camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 5, 10);
+
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.2;
+
+        const simPage = document.getElementById('simulator-page');
+        simPage.insertBefore(renderer.domElement, simPage.firstChild);
+
+        scene.add(new THREE.AmbientLight(0x404060, 0.6));
+        const mainLight = new THREE.DirectionalLight(0xffffff, 1.0);
+        mainLight.position.set(5, 12, 6);
+        mainLight.castShadow = true;
+        mainLight.shadow.mapSize.width = 1024;
+        mainLight.shadow.mapSize.height = 1024;
+        mainLight.shadow.camera.left = -20;
+        mainLight.shadow.camera.right = 20;
+        mainLight.shadow.camera.top = 20;
+        mainLight.shadow.camera.bottom = -20;
+        mainLight.shadow.camera.near = 0.1;
+        mainLight.shadow.camera.far = 50;
+        scene.add(mainLight);
+
+        const blueLight = new THREE.PointLight(0x00ccff, 1.5, 20);
+        blueLight.position.set(-8, 4, -5);
+        scene.add(blueLight);
+        const orangeLight = new THREE.PointLight(0xff6600, 1.2, 20);
+        orangeLight.position.set(8, 4, -5);
+        scene.add(orangeLight);
+
+        const floorMat = new THREE.MeshStandardMaterial({ color: 0x1a2a3a, roughness: 0.6, metalness: 0.3 });
+        const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), floorMat);
+        floor.rotation.x = -Math.PI / 2;
+        floor.receiveShadow = true;
+        scene.add(floor);
+
+        const gridHelper = new THREE.GridHelper(40, 40, 0x00ccff, 0x003366);
+        gridHelper.position.y = 0.01;
+        gridHelper.material.transparent = true;
+        gridHelper.material.opacity = 0.6;
+        scene.add(gridHelper);
+
+        studentDroneGroup = createDetailedDrone();
+        studentDroneGroup.position.copy(state.dronePos);
+        scene.add(studentDroneGroup);
+
+        const targetGeo = new THREE.SphereGeometry(0.5, 16, 16);
+        const targetMat = new THREE.MeshBasicMaterial({ color: 0xff6600, transparent: true, opacity: 0.6 });
+        targetMarker = new THREE.Mesh(targetGeo, targetMat);
+        targetMarker.position.copy(state.targetPos);
+        scene.add(targetMarker);
+
+        const ringGeo = new THREE.RingGeometry(1.2, 1.5, 32);
+        const ringMat = new THREE.MeshBasicMaterial({ color: 0xff6600, transparent: true, opacity: 0.4, side: THREE.DoubleSide });
+        targetRing = new THREE.Mesh(ringGeo, ringMat);
+        targetRing.rotation.x = -Math.PI / 2;
+        targetRing.position.copy(state.targetPos);
+        scene.add(targetRing);
+
+        if (!listenersAttached) {
+            setupEventListeners();
+            listenersAttached = true;
+        }
+
+        state.lastFrameTime = performance.now();
+        state.fpsLastUpdate = performance.now();
+        state.fpsFrames = 0;
+        animate(state.lastFrameTime);
+    }
+
+    // ====== АНИМАЦИЯ ======
+
+    function animate(currentTime) {
+        if (state.gameCompleted) { state.animationId = null; return; }
+        state.animationId = requestAnimationFrame(animate);
+
+        const delta = currentTime - state.lastFrameTime;
+        if (delta < FRAME_INTERVAL) return;
+        state.lastFrameTime = currentTime - (delta % FRAME_INTERVAL);
+
+        state.fpsFrames++;
+        if (currentTime - state.fpsLastUpdate >= 1000) {
+            state.currentFps = state.fpsFrames;
+            state.fpsFrames = 0;
+            state.fpsLastUpdate = currentTime;
+            const fpsEl = document.getElementById('fps-counter');
+            if (fpsEl) fpsEl.innerText = state.currentFps;
+        }
+
+        updateStudentAI();
+        handleManualControl();
+        state.propAngle += 0.6;
+        propellers.forEach(p => { p.rotation.y = state.propAngle; });
+
+        if (state.starsMesh) {
+            state.starsMesh.rotation.y += 0.0002;
+            state.starsMesh.rotation.x += 0.0001;
+        }
+        if (state.nebulaMesh) {
+            state.nebulaMesh.rotation.y += 0.0001;
+        }
+
+        const camTarget = state.dronePos.clone();
+        camTarget.y += 3;
+        camera.position.lerp(camTarget, 0.05);
+        camera.lookAt(state.dronePos);
+        if (targetMarker) targetMarker.scale.setScalar(1 + Math.sin(Date.now() * 0.003) * 0.2);
+        renderer.render(scene, camera);
+    }
+
+    // ====== СОБЫТИЯ ======
+
+    function handleResize() {
+        if (!camera || !renderer) return;
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function setupEventListeners() {
+        window.addEventListener('resize', handleResize);
+
+        document.getElementById('resetBtn').addEventListener('click', () => {
+            if (state.timerInterval) clearInterval(state.timerInterval);
+            if (state.controlTimeout) clearTimeout(state.controlTimeout);
+            if (state.hintTimeout) clearTimeout(state.hintTimeout);
+            fullGameRestart();
+        });
+
+        document.getElementById('exitMenuBtn').addEventListener('click', exitToMenu);
+
+        document.getElementById('fullRestartBtn').addEventListener('click', () => {
+            document.getElementById('victoryModal').classList.remove('show');
+            fullGameRestart();
+        });
+
+        document.getElementById('exitToMenuBtn').addEventListener('click', exitToMenu);
+
+        document.getElementById('defeatRestartBtn').addEventListener('click', () => {
+            document.getElementById('defeatModal').classList.remove('show');
+            fullGameRestart();
+        });
+
+        document.getElementById('defeatExitBtn').addEventListener('click', exitToMenu);
+
+        // Кнопки действий наставника
+        document.getElementById('hintBtn').addEventListener('click', giveHint);
+        document.getElementById('takeoverBtn').addEventListener('click', takeoverControl);
+        document.getElementById('encourageBtn').addEventListener('click', encourageStudent);
+
+        // Горячие клавиши
+        window.addEventListener('keydown', (e) => {
+            keys[e.key.toLowerCase()] = true;
+            if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(e.key.toLowerCase())) {
+                e.preventDefault();
+            }
+
+            if (e.key === 'h' || e.key === 'H') giveHint();
+            if (e.key === 't' || e.key === 'T') takeoverControl();
+            if (e.key === 'e' || e.key === 'E') encourageStudent();
+            if (e.key === 'r' || e.key === 'R') {
+                if (state.timerInterval) clearInterval(state.timerInterval);
+                if (state.controlTimeout) clearTimeout(state.controlTimeout);
+                if (state.hintTimeout) clearTimeout(state.hintTimeout);
+                fullGameRestart();
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            keys[e.key.toLowerCase()] = false;
+        });
+
+        window.addEventListener('blur', () => {
+            for (let k in keys) keys[k] = false;
+        });
+
+        // Сохранение при закрытии
+        window.addEventListener('beforeunload', () => {
+            if (state.animationId) cancelAnimationFrame(state.animationId);
+            if (state.timerInterval) clearInterval(state.timerInterval);
+            if (state.controlTimeout) clearTimeout(state.controlTimeout);
+            if (state.hintTimeout) clearTimeout(state.hintTimeout);
+            if (audioCtx && audioCtx.state !== 'closed') {
+                try { audioCtx.close(); } catch(e) {}
+            }
+            saveProgress();
+        });
+    }
+
+    // ====== ПЕРЕЗАПУСК ======
+
+    function fullGameRestart() {
+        if (state.isRestarting) return;
+        state.isRestarting = true;
+        state._warnedLowConf = false;
+        state.hintActive = false;
+        state.isControlling = false;
+        if (state.hintLine && scene) {
+            scene.remove(state.hintLine);
+            state.hintLine.geometry.dispose();
+            state.hintLine.material.dispose();
+            state.hintLine = null;
+        }
+        clearProgress();
+        const config = DIFFICULTY_CONFIG[currentDifficulty];
+        state.tasksCompleted = 0;
+        state.score = 0;
+        state.studentConfidence = 100;
+        state.studentAttention = 100;
+        state.studentErrors = 0;
+        state.hintsUsed = 0;
+        state.takeoversUsed = 0;
+        state.encouragements = 0;
+        state.gameCompleted = false;
+        state.dronePos.set(0, 2, 0);
+        state.droneVel.set(0, 0, 0);
+        state.timeLeft = config.MISSION_TIME;
+
+        initSimulator();
+        startMissionTimer(false);
+        startStudentAI();
+        syncUIFromState();
+        showNotification("🔄 Урок перезапущен!", 'success');
+        setTimeout(() => { state.isRestarting = false; }, 500);
+    }
+
+    // ====== ВОССТАНОВЛЕНИЕ ПРОГРЕССА ======
+
+    function showRestoreModal(data) {
+        if (document.getElementById('simulator-page').classList.contains('active')) {
+            clearProgress();
+            return;
+        }
+
+        const statsEl = document.getElementById('restoreStats');
+        const cfg = DIFFICULTY_CONFIG[data.difficulty];
+        statsEl.innerHTML = `
+            🎚️ Уровень: <strong>${cfg.name}</strong><br>
+            🎯 Заданий: <strong>${data.tasksCompleted}/${cfg.taskCount}</strong><br>
+            🎓 Оценка: <strong>${data.score}</strong><br>
+            ⏱️ Осталось: <strong>${data.timeLeft}с</strong>
+        `;
+        document.getElementById('restoreModal').classList.add('show');
+
+        document.getElementById('restoreContinueBtn').onclick = () => {
+            document.getElementById('restoreModal').classList.remove('show');
+            resumeFromSave(data);
+        };
+        document.getElementById('restoreNewBtn').onclick = () => {
+            document.getElementById('restoreModal').classList.remove('show');
+            clearProgress();
+        };
+    }
+
+    function resumeFromSave(data) {
+        currentDifficulty = data.difficulty;
+        const config = DIFFICULTY_CONFIG[currentDifficulty];
+
+        state.timeLeft = data.timeLeft;
+        state.tasksCompleted = data.tasksCompleted;
+        state.score = data.score;
+        state.studentConfidence = data.studentConfidence;
+        state.studentAttention = data.studentAttention;
+        state.studentErrors = data.studentErrors;
+        state.hintsUsed = data.hintsUsed;
+        state.takeoversUsed = data.takeoversUsed;
+        state.encouragements = data.encouragements;
+        state.dronePos.set(data.dronePos.x, data.dronePos.y, data.dronePos.z);
+        state.targetPos.set(data.targetPos.x, data.targetPos.y, data.targetPos.z);
+        state.gameCompleted = false;
+        state._warnedLowConf = false;
+
+        ensureAudio();
+        const music = document.getElementById('bg-music');
+        if (music.paused) {
+            music.volume = 0.4;
+            music.play().catch(() => console.log('Фоновая музыка недоступна — игра продолжается без звука'));
+        }
+
+        document.getElementById('intro-page').classList.add('hidden');
+        setTimeout(() => {
+            document.getElementById('simulator-page').classList.add('active');
+            document.getElementById('tasks-total').innerText = config.taskCount;
+            initSimulator();
+            startMissionTimer(true);
+            syncUIFromState();
+            showNotification("▶️ Обучение продолжено!", 'success');
+        }, 800);
+    }
+
+    // ====== ЗАПУСК ======
+
+    function startSimulator(difficulty) {
+        if (typeof THREE === 'undefined') {
+            alert('Ошибка: Three.js не загружен. Пожалуйста, обновите страницу.');
+            return;
+        }
+
+        currentDifficulty = difficulty;
+        const config = DIFFICULTY_CONFIG[difficulty];
+        state.timeLeft = config.MISSION_TIME;
+        state.taskCount = config.taskCount;
+        state.tasksCompleted = 0;
+        state.score = 0;
+        state.studentConfidence = 100;
+        state.studentAttention = 100;
+        state.studentErrors = 0;
+        state.hintsUsed = 0;
+        state.takeoversUsed = 0;
+        state.encouragements = 0;
+        state.gameCompleted = false;
+        state._warnedLowConf = false;
+        state.hintActive = false;
+        state.isControlling = false;
+
+        ensureAudio();
+        const music = document.getElementById('bg-music');
+        if (music.paused) {
+            music.volume = 0.4;
+            music.play().catch(() => console.log('Фоновая музыка недоступна — игра продолжается без звука'));
+        }
+
+        document.getElementById('intro-page').classList.add('hidden');
+        setTimeout(() => {
+            document.getElementById('simulator-page').classList.add('active');
+            document.getElementById('tasks-total').innerText = config.taskCount;
+            document.getElementById('tasks-completed').innerText = '0';
+            document.getElementById('score-value').innerText = '0';
+            initSimulator();
+            startMissionTimer(false);
+            startStudentAI();
+            syncUIFromState();
+            showNotification(`🎓 Уровень ${config.name} начат! Дайте подсказку ученику.`, 'success');
+        }, 800);
+    }
+
+    // ====== ИНИЦИАЛИЗАЦИЯ ПРИ ЗАГРУЗКЕ СТРАНИЦЫ ======
+
+    document.addEventListener('DOMContentLoaded', function() {
+        console.log('DOM загружен, инициализация...');
+
+        // Проверка загрузки Three.js
+        if (typeof THREE === 'undefined') {
+            console.error('Three.js не загружен!');
+            document.querySelector('.intro-desc').innerHTML = 
+                '⚠️ Ошибка загрузки Three.js. Пожалуйста, обновите страницу или проверьте интернет-соединение.';
+            return;
+        }
+
+        console.log('Three.js успешно загружен');
+
+        // Делаем функции глобальными
+        window.startSimulator = startSimulator;
+        window.giveHint = giveHint;
+        window.takeoverControl = takeoverControl;
+        window.encourageStudent = encourageStudent;
+        window.exitToMenu = exitToMenu;
+        window.fullGameRestart = fullGameRestart;
+
+        // Назначаем обработчики кнопок выбора сложности
+        document.getElementById('easyBtn').addEventListener('click', function() {
+            if (window.startSimulator) window.startSimulator('easy');
+        });
+        document.getElementById('mediumBtn').addEventListener('click', function() {
+            if (window.startSimulator) window.startSimulator('medium');
+        });
+        document.getElementById('hardBtn').addEventListener('click', function() {
+            if (window.startSimulator) window.startSimulator('hard');
+        });
+
+        // Проверка сохранённого прогресса
+        const saved = loadProgress();
+        if (saved) {
+            setTimeout(() => showRestoreModal(saved), 500);
+        }
+
+        console.log('Инициализация завершена!');
     });
-    
-    const sprite = new THREE.Sprite(material);
-    const radius = 40 + Math.random() * 30;
-    const theta = Math.random() * Math.PI * 2;
-    const phi = Math.acos(2 * Math.random() - 1);
-    
-    sprite.position.set(
-      radius * Math.sin(phi) * Math.cos(theta),
-      radius * Math.sin(phi) * Math.sin(theta) * 0.5 + 10,
-      radius * Math.cos(phi)
-    );
-    sprite.scale.set(30 + Math.random() * 20, 30 + Math.random() * 20, 1);
-    
-    group.add(sprite);
-  }
-  
-  return group;
-}
 
-function cleanupScene(){
-  if(renderer){
-    if(renderer.domElement && renderer.domElement.parentNode){
-      renderer.domElement.parentNode.removeChild(renderer.domElement);
-    }
-    renderer.dispose();
-    renderer = null;
-  }
-  if(scene){
-    scene.traverse(obj => {
-      if(obj.geometry) obj.geometry.dispose();
-      if(obj.material){
-        if(Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
-        else obj.material.dispose();
-      }
-    });
-    scene = null;
-  }
-  if(state.hintLine && scene){
-    scene.remove(state.hintLine);
-    state.hintLine.geometry.dispose();
-    state.hintLine.material.dispose();
-    state.hintLine = null;
-  }
-  propellers = [];
-  studentDroneGroup = null;
-  targetMarker = null;
-  targetRing = null;
-  state.starsMesh = null;
-  state.nebulaMesh = null;
-}
-
-function initSimulator(){
-  cleanupScene();
-  
-  state.gameCompleted = false;
-  if(!state.dronePos) state.dronePos = new THREE.Vector3(0, 2, 0);
-  if(!state.droneVel) state.droneVel = new THREE.Vector3(0, 0, 0);
-  state.dronePos.set(0, 2, 0);
-  state.droneVel.set(0, 0, 0);
-  state.propAngle = 0;
-  
-  scene = new THREE.Scene();
-  
-  const skyboxTexture = createProceduralSkybox();
-  scene.background = skyboxTexture;
-  scene.environment = skyboxTexture;
-  
-  scene.fog = new THREE.FogExp2(0x0a0a2a, 0.008);
-  
-  state.starsMesh = createStarField();
-  scene.add(state.starsMesh);
-  
-  state.nebulaMesh = createNebula();
-  scene.add(state.nebulaMesh);
-  
-  camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-  camera.position.set(0, 5, 10);
-  
-  renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.2;
-  
-  const simPage = document.getElementById('simulator-page');
-  simPage.insertBefore(renderer.domElement, simPage.firstChild);
-  
-  scene.add(new THREE.AmbientLight(0x404060, 0.6));
-  const mainLight = new THREE.DirectionalLight(0xffffff, 1.0);
-  mainLight.position.set(5, 12, 6);
-  mainLight.castShadow = true;
-  mainLight.shadow.mapSize.width = 1024; mainLight.shadow.mapSize.height = 1024;
-  mainLight.shadow.camera.left = -20;
-  mainLight.shadow.camera.right = 20;
-  mainLight.shadow.camera.top = 20;
-  mainLight.shadow.camera.bottom = -20;
-  mainLight.shadow.camera.near = 0.1;
-  mainLight.shadow.camera.far = 50;
-  scene.add(mainLight);
-  
-  const blueLight = new THREE.PointLight(0x00ccff, 1.5, 20);
-  blueLight.position.set(-8, 4, -5); scene.add(blueLight);
-  const orangeLight = new THREE.PointLight(0xff6600, 1.2, 20);
-  orangeLight.position.set(8, 4, -5); scene.add(orangeLight);
-  
-  const floorMat = new THREE.MeshStandardMaterial({ color: 0x1a2a3a, roughness: 0.6, metalness: 0.3 });
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), floorMat);
-  floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true;
-  scene.add(floor);
-  
-  const gridHelper = new THREE.GridHelper(40, 40, 0x00ccff, 0x003366);
-  gridHelper.position.y = 0.01; gridHelper.material.transparent = true;
-  gridHelper.material.opacity = 0.6; scene.add(gridHelper);
-  
-  studentDroneGroup = createDetailedDrone();
-  studentDroneGroup.position.copy(state.dronePos);
-  scene.add(studentDroneGroup);
-  
-  const targetGeo = new THREE.SphereGeometry(0.5, 16, 16);
-  const targetMat = new THREE.MeshBasicMaterial({ color: 0xff6600, transparent: true, opacity: 0.6 });
-  targetMarker = new THREE.Mesh(targetGeo, targetMat);
-  targetMarker.position.copy(state.targetPos); scene.add(targetMarker);
-  
-  const ringGeo = new THREE.RingGeometry(1.2, 1.5, 32);
-  const ringMat = new THREE.MeshBasicMaterial({ color: 0xff6600, transparent: true, opacity: 0.4, side: THREE.DoubleSide });
-  targetRing = new THREE.Mesh(ringGeo, ringMat);
-  targetRing.rotation.x = -Math.PI / 2; targetRing.position.copy(state.targetPos);
-  scene.add(targetRing);
-  
-  if(!listenersAttached){
-    setupEventListeners();
-    listenersAttached = true;
-  }
-  
-  state.lastFrameTime = performance.now();
-  state.fpsLastUpdate = performance.now();
-  state.fpsFrames = 0;
-  animate(state.lastFrameTime);
-}
-
-function animate(currentTime){
-  if(state.gameCompleted){ state.animationId = null; return; }
-  state.animationId = requestAnimationFrame(animate);
-  
-  const delta = currentTime - state.lastFrameTime;
-  if(delta < FRAME_INTERVAL) return;
-  state.lastFrameTime = currentTime - (delta % FRAME_INTERVAL);
-  
-  state.fpsFrames++;
-  if(currentTime - state.fpsLastUpdate >= 1000){
-    state.currentFps = state.fpsFrames;
-    state.fpsFrames = 0;
-    state.fpsLastUpdate = currentTime;
-    const fpsEl = document.getElementById('fps-counter');
-    if(fpsEl) fpsEl.innerText = state.currentFps;
-  }
-  
-  updateStudentAI();
-  handleManualControl();
-  state.propAngle += 0.6;
-  propellers.forEach(p => { p.rotation.y = state.propAngle; });
-  
-  if(state.starsMesh){
-    state.starsMesh.rotation.y += 0.0002;
-    state.starsMesh.rotation.x += 0.0001;
-  }
-  if(state.nebulaMesh){
-    state.nebulaMesh.rotation.y += 0.0001;
-  }
-  
-  const camTarget = state.dronePos.clone();
-  camTarget.y += 3;
-  camera.position.lerp(camTarget, 0.05);
-  camera.lookAt(state.dronePos);
-  if(targetMarker) targetMarker.scale.setScalar(1 + Math.sin(Date.now() * 0.003) * 0.2);
-  renderer.render(scene, camera);
-}
-
-function handleResize(){
-  if(!camera || !renderer) return;
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-}
-
-function setupEventListeners(){
-  window.addEventListener('resize', handleResize);
-  document.getElementById('resetBtn').addEventListener('click', () => {
-    if(state.timerInterval) clearInterval(state.timerInterval);
-    if(state.controlTimeout) clearTimeout(state.controlTimeout);
-    if(state.hintTimeout) clearTimeout(state.hintTimeout);
-    fullGameRestart();
-  });
-  document.getElementById('exitMenuBtn').addEventListener('click', exitToMenu);
-  document.getElementById('fullRestartBtn').addEventListener('click', () => {
-    document.getElementById('victoryModal').classList.remove('show'); fullGameRestart();
-  });
-  document.getElementById('exitToMenuBtn').addEventListener('click', exitToMenu);
-  document.getElementById('defeatRestartBtn').addEventListener('click', () => {
-    document.getElementById('defeatModal').classList.remove('show'); fullGameRestart();
-  });
-  document.getElementById('defeatExitBtn').addEventListener('click', exitToMenu);
-}
-
-function fullGameRestart(){
-  if(state.isRestarting) return;
-  state.isRestarting = true;
-  state._warnedLowConf = false;
-  state.hintActive = false;
-  state.isControlling = false;
-  if(state.hintLine && scene){ 
-    scene.remove(state.hintLine); 
-    state.hintLine.geometry.dispose();
-    state.hintLine.material.dispose();
-    state.hintLine = null; 
-  }
-  clearProgress();
-  const config = DIFFICULTY_CONFIG[currentDifficulty];
-  state.tasksCompleted = 0;
-  state.score = 0;
-  state.studentConfidence = 100;
-  state.studentAttention = 100;
-  state.studentErrors = 0;
-  state.hintsUsed = 0;
-  state.takeoversUsed = 0;
-  state.encouragements = 0;
-  state.gameCompleted = false;
-  state.dronePos.set(0, 2, 0);
-  state.droneVel.set(0, 0, 0);
-  state.timeLeft = config.MISSION_TIME;
-  
-  initSimulator();
-  startMissionTimer(false);
-  startStudentAI();
-  syncUIFromState();
-  showNotification("🔄 Урок перезапущен!", 'success');
-  setTimeout(() => { state.isRestarting = false; }, 500);
-}
-
-window.addEventListener('beforeunload', () => {
-  if(state.animationId) cancelAnimationFrame(state.animationId);
-  if(state.timerInterval) clearInterval(state.timerInterval);
-  if(state.controlTimeout) clearTimeout(state.controlTimeout);
-  if(state.hintTimeout) clearTimeout(state.hintTimeout);
-  if(audioCtx && audioCtx.state !== 'closed'){ try{ audioCtx.close(); } catch(e){} }
-  saveProgress();
-});
-
-window.addEventListener('DOMContentLoaded', () => {
-  const saved = loadProgress();
-  if(saved){
-    setTimeout(() => showRestoreModal(saved), 500);
-  }
-});
+})(); // Конец IIFE
 </script>
 </body>
 </html>
