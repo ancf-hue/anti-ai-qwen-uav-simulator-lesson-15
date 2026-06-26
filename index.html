@@ -368,6 +368,36 @@ body{ overflow: hidden; font-family:'Segoe UI','Orbitron', monospace; background
 
 #save-indicator{ position: fixed; bottom: 80px; right: 20px; color:#55ff55; font-size: 11px; opacity: 0; transition: opacity 0.3s; pointer-events: none; font-family: monospace; z-index: 100; text-shadow: 0 0 10px rgba(85, 255, 85, 0.6);}
 
+#three-error{
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0,0,0,0.95);
+    color: #ff4444;
+    padding: 40px;
+    border-radius: 20px;
+    border: 2px solid #ff4444;
+    text-align: center;
+    z-index: 99999;
+    max-width: 500px;
+    display: none;
+}
+#three-error h2{ color: #ff4444; margin-bottom: 15px; }
+#three-error p{ color: #ccccff; line-height: 1.6; margin: 10px 0; }
+#three-error .retry-btn{
+    background: #6666ff;
+    color: white;
+    border: none;
+    padding: 12px 30px;
+    border-radius: 12px;
+    font-size: 16px;
+    cursor: pointer;
+    margin-top: 15px;
+    font-weight: bold;
+}
+#three-error .retry-btn:hover{ background: #8888ff; }
+
 @media(max-width: 700px){
  .logo-header{ padding: 8px 12px; gap: 8px;}
  .logo-header img{ width: 32px; height: 32px;}
@@ -386,6 +416,14 @@ body{ overflow: hidden; font-family:'Segoe UI','Orbitron', monospace; background
 </style>
 </head>
 <body>
+
+<!-- Блок ошибки Three.js -->
+<div id="three-error">
+    <h2>⚠️ Ошибка загрузки</h2>
+    <p>Не удалось загрузить библиотеку Three.js.<br>
+    Проверьте интернет-соединение и обновите страницу.</p>
+    <button class="retry-btn" onclick="location.reload()">🔄 Обновить страницу</button>
+</div>
 
 <div class="logo-header">
   <img id="logoImg" src="favicon.ico" alt="НАСТАВНИК">
@@ -516,11 +554,105 @@ body{ overflow: hidden; font-family:'Segoe UI','Orbitron', monospace; background
   <source src="mentor-theme.mp3" type="audio/mpeg">
 </audio>
 
-<!-- Загрузка Three.js с fallback -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" 
-        onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js';">
+<!-- ============================================================ -->
+<!-- ЗАГРУЗКА THREE.JS С МНОЖЕСТВЕННЫМИ FALLBACK -->
+<!-- ============================================================ -->
+<script>
+    // Функция для проверки загрузки Three.js
+    function checkThreeJS() {
+        if (typeof THREE !== 'undefined') {
+            console.log('✅ Three.js загружен успешно');
+            return true;
+        }
+        return false;
+    }
+
+    // Показ ошибки
+    function showThreeError() {
+        document.getElementById('three-error').style.display = 'block';
+        document.querySelector('.difficulty-selector').style.opacity = '0.3';
+        document.querySelector('.difficulty-selector').style.pointerEvents = 'none';
+    }
+
+    // Проверяем через 2 секунды
+    setTimeout(function() {
+        if (!checkThreeJS()) {
+            showThreeError();
+        }
+    }, 2000);
 </script>
 
+<!-- Первый способ: CDN -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js">
+</script>
+
+<!-- Второй способ: если первый не сработал -->
+<script>
+    if (typeof THREE === 'undefined') {
+        console.log('⚠️ Первый CDN не сработал, пробуем второй...');
+        document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"><\/script>');
+    }
+</script>
+
+<!-- Третий способ: если второй не сработал -->
+<script>
+    if (typeof THREE === 'undefined') {
+        console.log('⚠️ Второй CDN не сработал, пробуем третий...');
+        document.write('<script src="https://unpkg.com/three@0.128.0/build/three.min.js"><\/script>');
+    }
+</script>
+
+<!-- Четвертый способ: если все CDN не сработали, используем локальную заглушку -->
+<script>
+    if (typeof THREE === 'undefined') {
+        console.log('⚠️ Все CDN не сработали!');
+        // Создаем минимальную заглушку для THREE
+        window.THREE = {
+            Vector3: function(x, y, z) { this.x = x || 0; this.y = y || 0; this.z = z || 0; },
+            Scene: function() { return {}; },
+            PerspectiveCamera: function() { return {}; },
+            WebGLRenderer: function() { return { setSize: function() {}, setPixelRatio: function() {} }; },
+            Mesh: function() { return {}; },
+            MeshStandardMaterial: function() { return {}; },
+            MeshBasicMaterial: function() { return {}; },
+            BoxGeometry: function() { return {}; },
+            SphereGeometry: function() { return {}; },
+            PlaneGeometry: function() { return {}; },
+            CylinderGeometry: function() { return {}; },
+            TorusGeometry: function() { return {}; },
+            RingGeometry: function() { return {}; },
+            ConeGeometry: function() { return {}; },
+            Group: function() { return {}; },
+            Points: function() { return {}; },
+            PointsMaterial: function() { return {}; },
+            Sprite: function() { return {}; },
+            SpriteMaterial: function() { return {}; },
+            Line: function() { return {}; },
+            LineBasicMaterial: function() { return {}; },
+            BufferGeometry: function() { return { setFromPoints: function() {}, setAttribute: function() {} }; },
+            BufferAttribute: function() { return {}; },
+            CanvasTexture: function() { return {}; },
+            FogExp2: function() { return {}; },
+            AmbientLight: function() { return {}; },
+            DirectionalLight: function() { return {}; },
+            PointLight: function() { return {}; },
+            GridHelper: function() { return {}; },
+            ACESFilmicToneMapping: 1,
+            DoubleSide: 2,
+            AdditiveBlending: 3,
+            EquirectangularReflectionMapping: 4,
+            PCFSoftShadowMap: 5
+        };
+        showThreeError();
+    } else {
+        console.log('✅ Three.js успешно загружен через один из CDN');
+        document.getElementById('three-error').style.display = 'none';
+    }
+</script>
+
+<!-- ============================================================ -->
+<!-- ОСНОВНОЙ КОД ИГРЫ -->
+<!-- ============================================================ -->
 <script>
 // ============================================================
 // ОСНОВНОЙ СКРИПТ
@@ -528,6 +660,12 @@ body{ overflow: hidden; font-family:'Segoe UI','Orbitron', monospace; background
 
 (function() {
     'use strict';
+
+    // Проверка THREE
+    if (typeof THREE === 'undefined') {
+        console.error('THREE не определен, игра не может запуститься');
+        return;
+    }
 
     // ====== КОНФИГУРАЦИЯ ======
     const DIFFICULTY_CONFIG = {
@@ -1347,7 +1485,6 @@ body{ overflow: hidden; font-family:'Segoe UI','Orbitron', monospace; background
     }
 
     function initSimulator() {
-        // Проверка загрузки Three.js
         if (typeof THREE === 'undefined') {
             console.error('Three.js не загружен!');
             showNotification('❌ Ошибка: Three.js не загружен. Обновите страницу.', 'hit');
@@ -1524,12 +1661,10 @@ body{ overflow: hidden; font-family:'Segoe UI','Orbitron', monospace; background
 
         document.getElementById('defeatExitBtn').addEventListener('click', exitToMenu);
 
-        // Кнопки действий наставника
         document.getElementById('hintBtn').addEventListener('click', giveHint);
         document.getElementById('takeoverBtn').addEventListener('click', takeoverControl);
         document.getElementById('encourageBtn').addEventListener('click', encourageStudent);
 
-        // Горячие клавиши
         window.addEventListener('keydown', (e) => {
             keys[e.key.toLowerCase()] = true;
             if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(e.key.toLowerCase())) {
@@ -1555,7 +1690,6 @@ body{ overflow: hidden; font-family:'Segoe UI','Orbitron', monospace; background
             for (let k in keys) keys[k] = false;
         });
 
-        // Сохранение при закрытии
         window.addEventListener('beforeunload', () => {
             if (state.animationId) cancelAnimationFrame(state.animationId);
             if (state.timerInterval) clearInterval(state.timerInterval);
@@ -1720,17 +1854,16 @@ body{ overflow: hidden; font-family:'Segoe UI','Orbitron', monospace; background
     document.addEventListener('DOMContentLoaded', function() {
         console.log('DOM загружен, инициализация...');
 
-        // Проверка загрузки Three.js
         if (typeof THREE === 'undefined') {
             console.error('Three.js не загружен!');
             document.querySelector('.intro-desc').innerHTML = 
                 '⚠️ Ошибка загрузки Three.js. Пожалуйста, обновите страницу или проверьте интернет-соединение.';
+            showThreeError();
             return;
         }
 
         console.log('Three.js успешно загружен');
 
-        // Делаем функции глобальными
         window.startSimulator = startSimulator;
         window.giveHint = giveHint;
         window.takeoverControl = takeoverControl;
@@ -1738,7 +1871,6 @@ body{ overflow: hidden; font-family:'Segoe UI','Orbitron', monospace; background
         window.exitToMenu = exitToMenu;
         window.fullGameRestart = fullGameRestart;
 
-        // Назначаем обработчики кнопок выбора сложности
         document.getElementById('easyBtn').addEventListener('click', function() {
             if (window.startSimulator) window.startSimulator('easy');
         });
@@ -1749,7 +1881,6 @@ body{ overflow: hidden; font-family:'Segoe UI','Orbitron', monospace; background
             if (window.startSimulator) window.startSimulator('hard');
         });
 
-        // Проверка сохранённого прогресса
         const saved = loadProgress();
         if (saved) {
             setTimeout(() => showRestoreModal(saved), 500);
@@ -1758,7 +1889,17 @@ body{ overflow: hidden; font-family:'Segoe UI','Orbitron', monospace; background
         console.log('Инициализация завершена!');
     });
 
-})(); // Конец IIFE
+    // Функция показа ошибки
+    window.showThreeError = function() {
+        document.getElementById('three-error').style.display = 'block';
+        const selector = document.querySelector('.difficulty-selector');
+        if (selector) {
+            selector.style.opacity = '0.3';
+            selector.style.pointerEvents = 'none';
+        }
+    };
+
+})();
 </script>
 </body>
 </html>
